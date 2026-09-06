@@ -16,6 +16,7 @@ from scripts.audit_bridge import (
     render_auditor_prompt,
     run_agy_audit,
     finalize_after_approval,
+    build_aurum_v16_closeout_request,
 )
 
 
@@ -226,6 +227,19 @@ def test_finalize_refuses_merge_or_non_final_approval(
     assert result.status == "REPOSITORY_SAFETY_STOP"
     assert fake_git_runner.commands == []
     assert fake_gh_runner.commands == []
+
+
+def test_aurum_v16_closeout_request_uses_audited_head_and_blocks_v17(git_repo):
+    merge_doc = git_repo.write_file("docs/merge-readiness.md", "AUDITED_HEAD=stale\n")
+    git_repo.commit_all("base")
+
+    request = build_aurum_v16_closeout_request(git_repo.path, merge_doc)
+
+    assert request.phase == "v1.6-closeout"
+    assert request.task_id == "aurum-v1.6-closeout"
+    assert request.base_sha == "7804af0896d686a3376c2a6d3c3bc3bcb8be7f9d"
+    assert request.head_sha
+    assert "v1.7 must not begin" in request.tdd_evidence_path.read_text(encoding="utf-8").lower()
 
 
 def test_contract_diff_evidence_preserves_protected_change(tmp_path, git_repo):

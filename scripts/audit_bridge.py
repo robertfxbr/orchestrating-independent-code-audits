@@ -26,6 +26,7 @@ class AuditProvenanceInvalid(Exception):
 
 
 MAX_AUDITOR_RETRIES = 2
+AURUM_V16_BASE_SHA = "7804af0896d686a3376c2a6d3c3bc3bcb8be7f9d"
 
 PROVENANCE_FILES = (
     "manifest.json",
@@ -605,6 +606,43 @@ def finalize_after_approval(
     else:
         subprocess.run(gh_command, cwd=package_dir, check=True)
     return BridgeResult("PR_CREATED", package_dir, None, "branch pushed and pull request created")
+
+
+def build_aurum_v16_closeout_request(worktree: Path, merge_readiness_doc: Path) -> AuditRequest:
+    head_sha = _run_git(worktree, "rev-parse", "HEAD").strip()
+    runtime_root = BridgeConfig.from_env().runtime_root / worktree.name / "v1.6-closeout"
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    evidence_path = runtime_root / "aurum-v1.6-closeout-evidence.md"
+    evidence_path.write_text(
+        f"""AURUM V1.6 CLOSEOUT
+
+OBJECTIVE:
+Identify why the merge-readiness document does not match the audited HEAD.
+
+MERGE_READINESS_DOCUMENT:
+{merge_readiness_doc}
+
+AUDITED_BASE_SHA:
+{AURUM_V16_BASE_SHA}
+
+CURRENT_HEAD_SHA:
+{head_sha}
+
+HARD RULE:
+V1.7 must not begin until V1.6 operational closeout is resolved and merged.
+""",
+        encoding="utf-8",
+    )
+    return AuditRequest(
+        phase="v1.6-closeout",
+        task_id="aurum-v1.6-closeout",
+        base_sha=AURUM_V16_BASE_SHA,
+        head_sha=head_sha,
+        spec_path=merge_readiness_doc,
+        plan_path=merge_readiness_doc,
+        test_output_path=None,
+        tdd_evidence_path=evidence_path,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
