@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from scripts.audit_bridge import BridgeConfig, BridgeResult, main
+import json
+
+from scripts.audit_bridge import AuditRequest, BridgeConfig, BridgeResult, build_audit_package, main
 
 
 def test_cli_imports_and_returns_usage_error_for_missing_args(capsys):
@@ -34,3 +36,38 @@ def test_bridge_result_records_status_and_head(tmp_path):
     assert result.attempt_dir == tmp_path
     assert result.head_sha == "abc123"
     assert result.message == "created"
+
+
+def test_package_contains_git_derived_evidence(tmp_path, git_repo, schema_path):
+    spec = git_repo.write_file("spec.md", "frozen contract\n")
+    plan = git_repo.write_file("plan.md", "approved plan\n")
+    git_repo.commit_all("base")
+    base_sha = git_repo.head()
+    git_repo.write_file("src.py", "print('changed')\n")
+    git_repo.commit_all("change")
+    head_sha = git_repo.head()
+    config = BridgeConfig.from_env().with_runtime_root(tmp_path / "runtime")
+
+    result = build_audit_package(
+        config,
+        AuditRequest(
+            phase="v1.0",
+            task_id="task-01",
+            base_sha=base_sha,
+            head_sha=head_sha,
+            spec_path=spec,
+            plan_path=plan,
+            test_output_path=None,
+            tdd_evidence_path=None,
+        ),
+    )
+
+    manifest = json.loads((result.attempt_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert result.status == "PACKAGE_CREATED"
+    assert manifest["base_sha"] == base_sha
+    assert manifest["head_sha"] == head_sha
+    assert manifest["tree_sha"]
+    assert (result.attempt_dir / "git-status.txt").exists()
+    assert (result.attempt_dir / "git-log.txt").exists()
+    assert (result.attempt_dir / "files-changed.json").exists()
+    assert "src.py" in (result.attempt_dir / "diff.patch").read_text(encoding="utf-8")
