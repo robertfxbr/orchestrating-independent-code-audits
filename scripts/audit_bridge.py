@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
+from jsonschema import ValidationError, validate
+
+
+class AuditorFailure(Exception):
+    def __init__(self, message: str, status: str = "AUDITOR_FAILURE") -> None:
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -33,6 +42,23 @@ class BridgeResult:
     attempt_dir: Path | None
     head_sha: str | None
     message: str
+
+
+def load_schema(schema_path: Path) -> dict[str, object]:
+    return json.loads(schema_path.read_text(encoding="utf-8"))
+
+
+def parse_auditor_output(raw_output: str, schema_path: Path) -> dict[str, object]:
+    if not raw_output.strip():
+        raise AuditorFailure("auditor produced no output")
+
+    try:
+        payload = json.loads(raw_output)
+        validate(instance=payload, schema=load_schema(schema_path))
+    except (json.JSONDecodeError, ValidationError) as exc:
+        raise AuditorFailure(f"invalid auditor verdict: {exc}") from exc
+
+    return payload
 
 
 def build_parser() -> argparse.ArgumentParser:
