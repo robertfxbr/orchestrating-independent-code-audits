@@ -10,6 +10,8 @@ from scripts.audit_bridge import (
     RepositorySafetyStop,
     build_audit_package,
     run_audit_with_retries,
+    route_verdict,
+    write_architecture_stop,
 )
 
 
@@ -90,3 +92,47 @@ def test_timeout_never_becomes_task_approved(fake_agy_runner, bridge_config, tmp
     )
 
     assert result.status == "AUDITOR_INFRA_STOP"
+
+
+def test_fix_required_routes_to_tdd_fix_until_limit():
+    verdict = {
+        "verdict": "FIX_REQUIRED",
+        "spec_compliance": "CHANGES_REQUIRED",
+        "code_quality": "CHANGES_REQUIRED",
+        "test_evidence": "FAIL",
+        "architecture_stop": False,
+        "findings": [
+            {
+                "id": "F-01",
+                "severity": "MEDIUM",
+                "contract": "section 10",
+                "file": "scripts/audit_bridge.py",
+                "line": 10,
+                "evidence": "invalid JSON accepted",
+                "required_proof": "invalid JSON returns AUDITOR_FAILURE",
+            }
+        ],
+        "confidence": "HIGH",
+    }
+
+    assert route_verdict(verdict, fix_attempt_count=0).status == "FIX_REQUIRED"
+    assert route_verdict(verdict, fix_attempt_count=3).status == "ESCALATE_TO_HIGH_REVIEW"
+
+
+def test_architecture_stop_writes_required_artifact(tmp_path, audit_request):
+    finding = {
+        "id": "F-99",
+        "severity": "CRITICAL",
+        "contract": "Protected historical fingerprint",
+        "file": "goldens/fingerprint.txt",
+        "line": 1,
+        "evidence": "fingerprint changed",
+        "required_proof": "approved architecture ruling",
+    }
+
+    artifact = write_architecture_stop(tmp_path, audit_request, finding)
+
+    text = artifact.read_text(encoding="utf-8")
+    assert "ARCHITECTURE_STOP" in text
+    assert "WHY_THIS_IS_NOT_A_NORMAL_BUG:" in text
+    assert "IMPLEMENTATION_STATUS:\nSTOPPED" in text

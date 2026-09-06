@@ -418,6 +418,64 @@ def run_audit_with_retries(
     )
 
 
+def route_verdict(verdict: dict[str, object], fix_attempt_count: int) -> BridgeResult:
+    findings = verdict.get("findings", [])
+    if verdict.get("architecture_stop") is True or verdict.get("verdict") == ARCHITECTURE_STOP:
+        return BridgeResult("ARCHITECTURE_STOP", None, None, "architectural ruling required")
+    if any(item.get("severity") == "CRITICAL" for item in findings if isinstance(item, dict)):
+        return BridgeResult("ARCHITECTURE_STOP", None, None, "critical contract finding")
+    if verdict.get("verdict") == "TASK_APPROVED" and verdict.get("test_evidence") == "PASS":
+        return BridgeResult("TASK_APPROVED", None, None, "task approved")
+    if any(item.get("severity") == "HIGH" for item in findings if isinstance(item, dict)):
+        return BridgeResult("ESCALATE_TO_HIGH_REVIEW", None, None, "high-severity finding")
+    if verdict.get("verdict") == "FIX_REQUIRED" and fix_attempt_count >= 3:
+        return BridgeResult("ESCALATE_TO_HIGH_REVIEW", None, None, "maximum automatic fixes reached")
+    return BridgeResult("FIX_REQUIRED", None, None, "auditor findings require a TDD fix")
+
+
+def write_architecture_stop(package_dir: Path, request: AuditRequest, finding: dict[str, object]) -> Path:
+    artifact = package_dir / f"architecture-stop-{request.task_id}.md"
+    content = f"""ARCHITECTURE_STOP
+
+TASK: {request.task_id}
+BASE_SHA: {request.base_sha}
+HEAD_SHA: {request.head_sha}
+
+CONTRACT:
+{finding.get('contract', '')}
+
+OBSERVED:
+{finding.get('evidence', '')}
+
+WHY_THIS_IS_NOT_A_NORMAL_BUG:
+The finding concerns a frozen contract or architecture and requires an architectural ruling.
+
+WHY_MINIMAL_ADAPTATION_IS_INSUFFICIENT:
+Changing implementation alone would silently redefine the authoritative contract.
+
+IMPACT:
+- identity
+- fingerprints
+- runner
+- gate
+- causal semantics
+- legacy behavior
+- other relevant contracts
+
+OPTIONS:
+A. Restore the frozen contract and continue the normal implementation task.
+B. Approve an architectural contract change before implementation resumes.
+
+RECOMMENDATION:
+{finding.get('required_proof', '')}
+
+IMPLEMENTATION_STATUS:
+STOPPED
+"""
+    artifact.write_text(content, encoding="utf-8")
+    return artifact
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="audit_bridge")
     subcommands = parser.add_subparsers(dest="command", required=True)

@@ -74,3 +74,23 @@ def bridge_config(tmp_path) -> object:
     from scripts.audit_bridge import BridgeConfig
 
     return BridgeConfig.from_env().with_runtime_root(tmp_path / "runtime")
+
+
+@pytest.fixture
+def audit_request(tmp_path):
+    from scripts.audit_bridge import AuditRequest
+
+    spec = tmp_path / "spec.md"
+    plan = tmp_path / "plan.md"
+    spec.write_text("frozen spec\n", encoding="utf-8")
+    plan.write_text("approved plan\n", encoding="utf-8")
+    return AuditRequest(
+        "implementation",
+        "task-09",
+        "base-sha",
+        "head-sha",
+        spec,
+        plan,
+        None,
+        None,
+    )
