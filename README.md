@@ -85,3 +85,59 @@ Use the skill before a multi-step implementation where independent approval is r
 ## Limits
 
 This skill does not authorize push, merge, release, or deploy. Those actions require separate authorization.
+
+## Deterministic Audit Package
+
+Runtime evidence is written outside the repository under `%LOCALAPPDATA%\AurumAuditRuntime` by default. Each package is bound to exact `--base-sha` and `--head-sha` values and contains immutable Git, diff, test, prompt, and auditor evidence.
+
+```powershell
+python -m scripts.audit_bridge package `
+  --phase implementation `
+  --task-id task-01 `
+  --base-sha <BASE_SHA> `
+  --head-sha <HEAD_SHA> `
+  --spec-path docs/superpowers/specs/2026-09-06-orchestrating-independent-code-audits-design.md `
+  --plan-path docs/superpowers/plans/2026-09-06-orchestrating-independent-code-audits.md
+```
+
+## AGY Headless Read-Only Audit
+
+AGY uses Gemini 3.8 Flash Medium for normal task audits and Gemini 3.8 Flash High for escalation and final audits. It runs headlessly with sandboxed read-only access, explicit package/repository directories, and strict JSON schema validation. No command permission, edit mode, or dangerous permission bypass is allowed.
+
+```powershell
+python -m scripts.audit_bridge audit `
+  --phase implementation `
+  --task-id task-01 `
+  --base-sha <BASE_SHA> `
+  --head-sha <HEAD_SHA> `
+  --spec-path docs/superpowers/specs/2026-09-06-orchestrating-independent-code-audits-design.md `
+  --plan-path docs/superpowers/plans/2026-09-06-orchestrating-independent-code-audits.md
+```
+
+## Verdict Semantics
+
+`TASK_APPROVED` applies only to the exact audited HEAD. `FIX_REQUIRED` starts a new RED test and immutable attempt. `AUDITOR_INFRA_STOP`, `REPOSITORY_SAFETY_STOP`, and `ARCHITECTURE_STOP` fail closed.
+
+## Automatic Fix Loop
+
+The implementer follows RED, minimal fix, GREEN, regression, focused commit, package, and independent audit. After three automatic fix attempts, the task escalates to Gemini 3.8 Flash High.
+
+## Final Phase Push and PR
+
+Only final Gemini 3.8 Flash High approval permits push and PR creation:
+
+```powershell
+python -m scripts.audit_bridge finalize `
+  --phase final `
+  --task-id final-closeout `
+  --base-sha <BASE_SHA> `
+  --head-sha <HEAD_SHA> `
+  --spec-path docs/superpowers/specs/2026-09-06-orchestrating-independent-code-audits-design.md `
+  --plan-path docs/superpowers/plans/2026-09-06-orchestrating-independent-code-audits.md
+```
+
+No merge command is run by this project. The user retains merge authority.
+
+## Aurum V1.6 Closeout
+
+The Aurum V1.6 closeout is the first real integration case. V1.7 must not begin until the V1.6 merge-readiness evidence is audited against the exact HEAD and the final PR gate is satisfied.
