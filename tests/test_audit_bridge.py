@@ -11,6 +11,7 @@ from scripts.audit_bridge import (
     BridgeResult,
     build_audit_package,
     classify_changed_file,
+    _diff_for_paths,
     main,
 )
 
@@ -134,3 +135,23 @@ def test_protected_contract_paths_are_classified_for_auditor_evidence():
         )
         == "PROTECTED_CONTRACT"
     )
+
+
+def test_contract_diff_evidence_preserves_protected_change(tmp_path, git_repo):
+    protected = git_repo.write_file("goldens/fingerprint.txt", "abc\n")
+    git_repo.commit_all("base")
+    base_sha = git_repo.head()
+    git_repo.write_file("goldens/fingerprint.txt", "def\n")
+    git_repo.commit_all("contract change")
+    head_sha = git_repo.head()
+
+    contract_diff = _diff_for_paths(
+        git_repo.path,
+        base_sha,
+        head_sha,
+        [str(protected.relative_to(git_repo.path))],
+    )
+
+    assert "goldens/fingerprint.txt" in contract_diff
+    assert "-abc" in contract_diff
+    assert "+def" in contract_diff

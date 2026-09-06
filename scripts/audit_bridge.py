@@ -10,6 +10,8 @@ from pathlib import Path
 
 from jsonschema import ValidationError, validate
 
+ARCHITECTURE_STOP = "ARCHITECTURE_STOP"
+
 
 class AuditorFailure(Exception):
     def __init__(self, message: str, status: str = "AUDITOR_FAILURE") -> None:
@@ -27,6 +29,12 @@ class RepositorySafetyStop(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.status = "REPOSITORY_SAFETY_STOP"
+
+
+class ArchitectureStop(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.status = ARCHITECTURE_STOP
 
 
 @dataclass(frozen=True)
@@ -177,8 +185,11 @@ def detect_repository_safety_stop(
     if porcelain.strip():
         raise RepositorySafetyStop("unexpected dirty worktree affects audit evidence")
 
-    _run_git(worktree, "rev-parse", f"{base_sha}^{{commit}}")
-    _run_git(worktree, "rev-parse", f"{head_sha}^{{commit}}")
+    try:
+        _run_git(worktree, "rev-parse", f"{base_sha}^{{commit}}")
+        _run_git(worktree, "rev-parse", f"{head_sha}^{{commit}}")
+    except subprocess.CalledProcessError as exc:
+        raise RepositorySafetyStop("invalid audit commit SHA") from exc
     current_head = _run_git(worktree, "rev-parse", "HEAD").strip()
     if current_head != head_sha:
         raise RepositorySafetyStop("current HEAD differs from requested audited HEAD")
@@ -190,7 +201,7 @@ def detect_repository_safety_stop(
     ]
     for path in changed_paths:
         if classify_changed_file(path, "M", protected_contract_files) == "PROTECTED_CONTRACT":
-            raise RepositorySafetyStop(f"protected contract changed: {path}")
+            raise ArchitectureStop(f"protected contract changed: {path}")
 
     resolved_worktree = worktree.resolve()
     resolved_runtime = runtime_root.resolve()
