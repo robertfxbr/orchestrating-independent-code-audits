@@ -9,6 +9,7 @@ from scripts.audit_bridge import (
     BridgeConfig,
     RepositorySafetyStop,
     build_audit_package,
+    run_audit_with_retries,
 )
 
 
@@ -61,3 +62,31 @@ def test_invalid_git_sha_is_a_repository_safety_stop(tmp_path, git_repo):
 
     assert exc.value.status == "REPOSITORY_SAFETY_STOP"
     assert "sha" in str(exc.value).lower()
+
+
+def test_invalid_auditor_output_retries_twice_then_infra_stop(
+    fake_agy_runner, bridge_config, tmp_path, schema_path
+):
+    package_dir = tmp_path / "attempt-01"
+    package_dir.mkdir()
+    fake_agy_runner.outputs = ["not json", "", '{"verdict":"APPROVED"}']
+
+    result = run_audit_with_retries(
+        bridge_config.with_agy_runner(fake_agy_runner), package_dir, "task", schema_path
+    )
+
+    assert result.status == "AUDITOR_INFRA_STOP"
+    assert fake_agy_runner.call_count == 3
+    assert (package_dir / "agy-raw-output.txt").read_text(encoding="utf-8") == '{"verdict":"APPROVED"}'
+
+
+def test_timeout_never_becomes_task_approved(fake_agy_runner, bridge_config, tmp_path, schema_path):
+    package_dir = tmp_path / "attempt-01"
+    package_dir.mkdir()
+    fake_agy_runner.raise_timeout = True
+
+    result = run_audit_with_retries(
+        bridge_config.with_agy_runner(fake_agy_runner), package_dir, "task", schema_path
+    )
+
+    assert result.status == "AUDITOR_INFRA_STOP"

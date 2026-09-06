@@ -19,6 +19,9 @@ class AuditorFailure(Exception):
         self.status = status
 
 
+MAX_AUDITOR_RETRIES = 2
+
+
 class AttemptAlreadyExistsError(Exception):
     def __init__(self, attempt_dir: Path) -> None:
         super().__init__(f"audit attempt already exists and is immutable: {attempt_dir}")
@@ -384,6 +387,35 @@ def run_agy_audit(config: BridgeConfig, package_dir: Path, prompt_kind: str) -> 
             f"AGY exited with status {completed.returncode}: {completed.stderr.strip()}"
         )
     return completed.stdout
+
+
+def run_audit_with_retries(
+    config: BridgeConfig,
+    package_dir: Path,
+    prompt_kind: str,
+    schema_path: Path,
+) -> BridgeResult:
+    last_output = ""
+    for _ in range(MAX_AUDITOR_RETRIES + 1):
+        try:
+            last_output = run_agy_audit(config, package_dir, prompt_kind)
+            verdict = parse_auditor_output(last_output, schema_path)
+            return BridgeResult(
+                status="TASK_APPROVED",
+                attempt_dir=package_dir,
+                head_sha=str(verdict.get("head_sha")) if verdict.get("head_sha") else None,
+                message="auditor verdict accepted",
+            )
+        except (AuditorFailure, TimeoutError, OSError):
+            continue
+
+    (package_dir / "agy-raw-output.txt").write_text(last_output, encoding="utf-8")
+    return BridgeResult(
+        status="AUDITOR_INFRA_STOP",
+        attempt_dir=package_dir,
+        head_sha=None,
+        message="auditor failed after maximum retries",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

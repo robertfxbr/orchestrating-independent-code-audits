@@ -47,12 +47,20 @@ def git_repo(tmp_path) -> GitRepo:
 class FakeAgyRunner:
     def __init__(self) -> None:
         self.output = ""
+        self.outputs: list[str] = []
+        self.call_count = 0
+        self.raise_timeout = False
         self.last_command: list[str] = []
         self.last_cwd: Path | None = None
 
     def run(self, command: list[str], cwd: Path) -> str:
         self.last_command = command
         self.last_cwd = cwd
+        self.call_count += 1
+        if self.raise_timeout:
+            raise TimeoutError("fake timeout")
+        if self.outputs:
+            return self.outputs.pop(0)
         return self.output
 
 
