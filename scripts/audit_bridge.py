@@ -53,6 +53,16 @@ class BridgeConfig:
             protected_contract_files=self.protected_contract_files,
         )
 
+    def with_protected_contract_files(self, protected_contract_files: tuple[str, ...]) -> "BridgeConfig":
+        return BridgeConfig(
+            runtime_root=self.runtime_root,
+            agy_command=self.agy_command,
+            task_model=self.task_model,
+            high_model=self.high_model,
+            final_model=self.final_model,
+            protected_contract_files=protected_contract_files,
+        )
+
 
 @dataclass(frozen=True)
 class BridgeResult:
@@ -127,6 +137,29 @@ def _attempt_dir(config: BridgeConfig, state: GitState, request: AuditRequest) -
     return config.runtime_root / state.repository / request.phase / request.task_id / "attempt-01"
 
 
+def _normalize_repo_path(path: str) -> str:
+    return path.replace("\\", "/")
+
+
+def classify_changed_file(path: str, status: str, protected_contract_files: tuple[str, ...]) -> str:
+    normalized = _normalize_repo_path(path)
+    protected = {_normalize_repo_path(item) for item in protected_contract_files}
+    if normalized in protected or normalized.startswith("docs/superpowers/specs/"):
+        return "PROTECTED_CONTRACT"
+    if normalized.startswith("tests/"):
+        if status == "A":
+            return "NEW_TEST"
+        if status in {"M", "R"}:
+            return "MODIFIED_EXISTING_TEST"
+        if status == "D":
+            return "DELETED_TEST"
+    return "PRODUCTION"
+
+
+def _diff_for_paths(worktree: Path, base_sha: str, head_sha: str, paths: list[str]) -> str:
+    return "".join(_run_git(worktree, "diff", base_sha, head_sha, "--", path) for path in paths)
+
+
 def build_audit_package(config: BridgeConfig, request: AuditRequest) -> BridgeResult:
     worktree = _request_worktree(request)
     state = collect_git_state(worktree, request.base_sha, request.head_sha)
@@ -137,11 +170,25 @@ def build_audit_package(config: BridgeConfig, request: AuditRequest) -> BridgeRe
 
     changed_lines = _run_git(worktree, "diff", "--name-status", request.base_sha, request.head_sha)
     changed_files = []
+    production_paths: list[str] = []
+    test_paths: list[str] = []
+    contract_paths: list[str] = []
+    test_summary: dict[str, str] = {}
     for line in changed_lines.splitlines():
         if not line.strip():
             continue
         parts = line.split()
-        changed_files.append({"status": parts[0], "path": parts[-1]})
+        status = parts[0]
+        path = parts[-1]
+        classification = classify_changed_file(path, status, config.protected_contract_files)
+        changed_files.append({"status": status, "path": path, "classification": classification})
+        if classification == "PROTECTED_CONTRACT":
+            contract_paths.append(path)
+        elif classification in {"NEW_TEST", "MODIFIED_EXISTING_TEST", "DELETED_TEST"}:
+            test_paths.append(path)
+            test_summary[path] = classification
+        else:
+            production_paths.append(path)
 
     manifest = {
         "phase": request.phase,
@@ -179,10 +226,19 @@ def build_audit_package(config: BridgeConfig, request: AuditRequest) -> BridgeRe
     )
     (attempt_dir / "files-changed.json").write_text(json.dumps(changed_files, indent=2), encoding="utf-8")
     (attempt_dir / "diff.patch").write_text(_run_git(worktree, "diff", request.base_sha, request.head_sha), encoding="utf-8")
-    (attempt_dir / "production_diff.patch").write_text("", encoding="utf-8")
-    (attempt_dir / "test_diff.patch").write_text("", encoding="utf-8")
-    (attempt_dir / "contract_diff.patch").write_text("", encoding="utf-8")
-    (attempt_dir / "test-summary.json").write_text("{}", encoding="utf-8")
+    (attempt_dir / "production_diff.patch").write_text(
+        _diff_for_paths(worktree, request.base_sha, request.head_sha, production_paths),
+        encoding="utf-8",
+    )
+    (attempt_dir / "test_diff.patch").write_text(
+        _diff_for_paths(worktree, request.base_sha, request.head_sha, test_paths),
+        encoding="utf-8",
+    )
+    (attempt_dir / "contract_diff.patch").write_text(
+        _diff_for_paths(worktree, request.base_sha, request.head_sha, contract_paths),
+        encoding="utf-8",
+    )
+    (attempt_dir / "test-summary.json").write_text(json.dumps(test_summary, indent=2), encoding="utf-8")
     (attempt_dir / "test-output.txt").write_text(
         request.test_output_path.read_text(encoding="utf-8") if request.test_output_path else "",
         encoding="utf-8",

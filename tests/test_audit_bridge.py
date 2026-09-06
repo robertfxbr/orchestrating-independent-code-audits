@@ -100,3 +100,33 @@ def test_attempts_are_outside_worktree_and_immutable(tmp_path, git_repo):
     with pytest.raises(AttemptAlreadyExistsError) as exc:
         build_audit_package(config, request)
     assert exc.value.status == "REPOSITORY_SAFETY_STOP"
+
+
+def test_package_classifies_test_changes_and_contract_changes(tmp_path, git_repo):
+    spec = git_repo.write_file("spec.md", "contract\n")
+    plan = git_repo.write_file("plan.md", "plan\n")
+    protected = git_repo.write_file("goldens/fingerprint.txt", "abc\n")
+    git_repo.write_file("tests/test_old.py", "def test_old():\n    assert 1 == 1\n")
+    git_repo.commit_all("base")
+    base_sha = git_repo.head()
+    git_repo.write_file("tests/test_old.py", "def test_old():\n    assert 2 == 2\n")
+    git_repo.write_file("tests/test_new.py", "def test_new():\n    assert 'x' == 'x'\n")
+    git_repo.write_file("goldens/fingerprint.txt", "def\n")
+    git_repo.commit_all("head")
+    head_sha = git_repo.head()
+    protected_relative = str(protected.relative_to(git_repo.path)).replace("\\", "/")
+    config = (
+        BridgeConfig.from_env()
+        .with_runtime_root(tmp_path / "runtime")
+        .with_protected_contract_files((protected_relative,))
+    )
+
+    result = build_audit_package(
+        config,
+        AuditRequest("v1.0", "task-02", base_sha, head_sha, spec, plan, None, None),
+    )
+
+    summary = json.loads((result.attempt_dir / "test-summary.json").read_text(encoding="utf-8"))
+    assert summary["tests/test_old.py"] == "MODIFIED_EXISTING_TEST"
+    assert summary["tests/test_new.py"] == "NEW_TEST"
+    assert "goldens/fingerprint.txt" in (result.attempt_dir / "contract_diff.patch").read_text(encoding="utf-8")
