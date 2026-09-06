@@ -67,9 +67,11 @@ class FakeAgyRunner:
 class FakeCommandRunner:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
+        self.last_cwd: Path | None = None
 
     def run(self, command: list[str], cwd: Path | None = None) -> str:
         self.commands.append(command)
+        self.last_cwd = cwd
         return ""
 
 

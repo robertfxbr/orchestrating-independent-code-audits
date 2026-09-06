@@ -565,6 +565,12 @@ def finalize_after_approval(
     pr_body: str,
 ) -> BridgeResult:
     verdict = json.loads((package_dir / "auditor-verdict.json").read_text(encoding="utf-8"))
+    manifest_path = package_dir / "manifest.json"
+    audited_worktree = package_dir
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("worktree"):
+            audited_worktree = Path(manifest["worktree"])
     approved = (
         verdict.get("verdict") == "TASK_APPROVED"
         and verdict.get("spec_compliance") == "APPROVED"
@@ -598,13 +604,13 @@ def finalize_after_approval(
         pr_body,
     ]
     if config.git_runner is not None:
-        config.git_runner.run(git_command, package_dir)
+        config.git_runner.run(git_command, audited_worktree)
     else:
-        subprocess.run(git_command, cwd=package_dir, check=True)
+        subprocess.run(git_command, cwd=audited_worktree, check=True)
     if config.gh_runner is not None:
-        config.gh_runner.run(gh_command, package_dir)
+        config.gh_runner.run(gh_command, audited_worktree)
     else:
-        subprocess.run(gh_command, cwd=package_dir, check=True)
+        subprocess.run(gh_command, cwd=audited_worktree, check=True)
     return BridgeResult("PR_CREATED", package_dir, None, "branch pushed and pull request created")
 
 

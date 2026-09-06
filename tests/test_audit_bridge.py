@@ -229,6 +229,37 @@ def test_finalize_refuses_merge_or_non_final_approval(
     assert fake_gh_runner.commands == []
 
 
+def test_finalize_runs_git_and_gh_from_audited_worktree(
+    fake_git_runner, fake_gh_runner, bridge_config, tmp_path
+):
+    package_dir = tmp_path / "attempt-01"
+    package_dir.mkdir()
+    audited_worktree = tmp_path / "audited-worktree"
+    audited_worktree.mkdir()
+    (package_dir / "manifest.json").write_text(
+        json.dumps({"worktree": str(audited_worktree)}), encoding="utf-8"
+    )
+    (package_dir / "auditor-verdict.json").write_text(
+        '{"verdict":"TASK_APPROVED","spec_compliance":"APPROVED",'
+        '"code_quality":"APPROVED","test_evidence":"PASS",'
+        '"architecture_stop":false,"findings":[],"confidence":"HIGH",'
+        '"prompt_kind":"final"}',
+        encoding="utf-8",
+    )
+
+    finalize_after_approval(
+        bridge_config.with_git_runner(fake_git_runner).with_gh_runner(fake_gh_runner),
+        package_dir,
+        remote="origin",
+        branch="feature/audit-bridge",
+        pr_title="title",
+        pr_body="body",
+    )
+
+    assert fake_git_runner.last_cwd == audited_worktree
+    assert fake_gh_runner.last_cwd == audited_worktree
+
+
 def test_aurum_v16_closeout_request_uses_audited_head_and_blocks_v17(git_repo):
     merge_doc = git_repo.write_file("docs/merge-readiness.md", "AUDITED_HEAD=stale\n")
     git_repo.commit_all("base")
