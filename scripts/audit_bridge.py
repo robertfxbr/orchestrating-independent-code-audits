@@ -19,7 +19,29 @@ class AuditorFailure(Exception):
         self.status = status
 
 
+class AuditProvenanceInvalid(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.status = "AUDIT_PROVENANCE_INVALID"
+
+
 MAX_AUDITOR_RETRIES = 2
+
+PROVENANCE_FILES = (
+    "manifest.json",
+    "git-status.txt",
+    "git-log.txt",
+    "files-changed.json",
+    "diff.patch",
+    "production_diff.patch",
+    "test_diff.patch",
+    "contract_diff.patch",
+    "test-summary.json",
+    "test-output.txt",
+    "tdd-evidence.md",
+    "agy-prompt.txt",
+    "agy-raw-output.txt",
+)
 
 
 class AttemptAlreadyExistsError(Exception):
@@ -474,6 +496,27 @@ STOPPED
 """
     artifact.write_text(content, encoding="utf-8")
     return artifact
+
+
+def calculate_audit_package_id(package_dir: Path) -> str:
+    digest = hashlib.sha256()
+    for filename in PROVENANCE_FILES:
+        path = package_dir / filename
+        digest.update(path.read_bytes() if path.exists() else b"")
+    return digest.hexdigest()
+
+
+def write_normalized_verdict(
+    package_dir: Path,
+    verdict: dict[str, object],
+    audited_head_sha: str,
+) -> Path:
+    manifest = json.loads((package_dir / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("head_sha") != audited_head_sha:
+        raise AuditProvenanceInvalid("normalized verdict HEAD does not match manifest HEAD")
+    target = package_dir / "auditor-verdict.json"
+    target.write_text(json.dumps(verdict, indent=2, sort_keys=True), encoding="utf-8")
+    return target
 
 
 def build_parser() -> argparse.ArgumentParser:
