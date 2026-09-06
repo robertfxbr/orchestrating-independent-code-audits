@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import json
 
-from scripts.audit_bridge import AuditRequest, BridgeConfig, BridgeResult, build_audit_package, main
+import pytest
+
+from scripts.audit_bridge import (
+    AttemptAlreadyExistsError,
+    AuditRequest,
+    BridgeConfig,
+    BridgeResult,
+    build_audit_package,
+    main,
+)
 
 
 def test_cli_imports_and_returns_usage_error_for_missing_args(capsys):
@@ -71,3 +80,23 @@ def test_package_contains_git_derived_evidence(tmp_path, git_repo, schema_path):
     assert (result.attempt_dir / "git-log.txt").exists()
     assert (result.attempt_dir / "files-changed.json").exists()
     assert "src.py" in (result.attempt_dir / "diff.patch").read_text(encoding="utf-8")
+
+
+def test_attempts_are_outside_worktree_and_immutable(tmp_path, git_repo):
+    spec = git_repo.write_file("spec.md", "contract\n")
+    plan = git_repo.write_file("plan.md", "plan\n")
+    git_repo.commit_all("base")
+    base_sha = git_repo.head()
+    git_repo.write_file("module.py", "value = 1\n")
+    git_repo.commit_all("head")
+    head_sha = git_repo.head()
+    config = BridgeConfig.from_env().with_runtime_root(tmp_path / "runtime")
+    request = AuditRequest("v1.0", "task-01", base_sha, head_sha, spec, plan, None, None)
+
+    first = build_audit_package(config, request)
+
+    assert git_repo.path not in first.attempt_dir.parents
+    assert first.attempt_dir.name == "attempt-01"
+    with pytest.raises(AttemptAlreadyExistsError) as exc:
+        build_audit_package(config, request)
+    assert exc.value.status == "REPOSITORY_SAFETY_STOP"

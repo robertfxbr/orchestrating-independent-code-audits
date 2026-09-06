@@ -17,6 +17,12 @@ class AuditorFailure(Exception):
         self.status = status
 
 
+class AttemptAlreadyExistsError(Exception):
+    def __init__(self, attempt_dir: Path) -> None:
+        super().__init__(f"audit attempt already exists and is immutable: {attempt_dir}")
+        self.status = "REPOSITORY_SAFETY_STOP"
+
+
 @dataclass(frozen=True)
 class BridgeConfig:
     runtime_root: Path
@@ -125,7 +131,9 @@ def build_audit_package(config: BridgeConfig, request: AuditRequest) -> BridgeRe
     worktree = _request_worktree(request)
     state = collect_git_state(worktree, request.base_sha, request.head_sha)
     attempt_dir = _attempt_dir(config, state, request)
-    attempt_dir.mkdir(parents=True, exist_ok=True)
+    if attempt_dir.exists():
+        raise AttemptAlreadyExistsError(attempt_dir)
+    attempt_dir.mkdir(parents=True)
 
     changed_lines = _run_git(worktree, "diff", "--name-status", request.base_sha, request.head_sha)
     changed_files = []
