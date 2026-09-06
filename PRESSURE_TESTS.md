@@ -31,3 +31,13 @@ Without this skill, implementation and audit authority are easy to blur. The bas
 ## Non-Goals
 
 The skill does not authorize push, merge, release, or deploy. It does not silently choose providers, silently swap providers, or treat unavailable reviewers as approval.
+
+## Frozen Provider And Closeout Contract
+
+The executable workflow must also satisfy these project bindings:
+
+- Codex is the implementer; AGY is independent; ChatGPT is architectural arbiter only; the user merges.
+- Gemini 3.8 Flash Medium is the default task auditor and Gemini 3.8 Flash High is used for escalation and final audit.
+- `AUDITOR_INFRA_STOP`, `REPOSITORY_SAFETY_STOP`, and `ARCHITECTURE_STOP` fail closed.
+- A final approval may push and create a PR, but merge is never automatic.
+- The Aurum V1.6 closeout is an integration test of the complete state machine.

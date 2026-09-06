@@ -5,106 +5,52 @@ description: Use when implementing multi-step software changes that require inde
 
 # Orchestrating Independent Code Audits
 
-Use this skill when one agent implements and each task needs independent audit before it can advance. The workflow is provider-agnostic: concrete provider names are bindings for canonical roles, not workflow logic.
+This skill governs multi-step implementation with an independent AGY audit after every focused commit.
 
-## Canonical Roles
+## Roles and Authority
 
-Use exactly these roles:
+- Codex is the implementer.
+- AGY / Gemini 3.8 Flash Medium is the default independent task auditor.
+- AGY / Gemini 3.8 Flash High is the escalation and final-phase auditor.
+- ChatGPT is architectural arbiter only.
+- The human user retains merge authority.
 
-- `implementer`: writes failing tests, code, fixes, and commits.
-- `primary_auditor`: first independent reviewer for every task.
-- `critical_auditor`: adversarial independent reviewer for critical findings or always-critical tasks.
-- `ruling_authority`: human or architecture authority that resolves material disagreement.
+The implementer cannot approve its own work, replace AGY with self-review, or silently change the frozen spec.
 
-Do not add provider-specific roles.
+## Required TDD Loop
 
-## Resolve Bindings
+Every task follows: RED observed -> minimal implementation -> GREEN -> regression -> focused commit -> deterministic audit package -> independent audit.
 
-Resolve role providers in this order:
-
-1. Explicit user instruction.
-2. Project config at `.agents/audit-orchestration.yaml`.
-3. If still unresolved, ask the user before implementation.
-
-Never choose or swap providers silently. Fallbacks are valid only when explicitly configured.
-
-## Independence Gate
-
-Before implementation starts, verify:
-
-- `implementer != primary_auditor`.
-- The implementer never approves its own code.
-- When `critical_auditor` is required, it must differ from `implementer` for the review to count as independent.
-
-Invalid bindings produce `CONFIGURATION_ERROR` and stop the task.
-
-## Canonical Workflow
-
-For each task:
-
-1. `implementer` creates a failing test or executable check first (`RED`).
-2. Confirm RED failed for the expected reason.
-3. Implement the minimum change.
-4. Run focused checks to reach `GREEN`.
-5. Run relevant regression checks.
-6. Commit the task.
-7. Build an audit package pinned to the exact commit SHA.
-8. Send the package to `primary_auditor`.
-
-If `primary_auditor` returns `APPROVED`, that exact commit may advance.
-
-If `primary_auditor` returns `FIX_REQUIRED`, the implementer first creates a regression test reproducing the finding, verifies RED, fixes minimally, verifies GREEN, runs regression checks, commits, and requests re-audit.
-
-If `primary_auditor` reports severity `CRITICAL`, or the task matches configured `always_critical_tasks`, send the package to `critical_auditor` for adversarial independent review.
-
-If `primary_auditor` and `critical_auditor` materially agree on the problem, the implementer fixes via TDD and the relevant auditors re-audit.
-
-If they materially diverge, return verdict `ARCHITECTURE_STOP` with reason `ARCHITECTURE_RULING_REQUIRED`. No agent may advance until `ruling_authority` decides.
-
-## Auditor Availability
-
-Unavailable auditors block approval:
-
-- `primary_auditor` unavailable: `TASK_APPROVAL_BLOCKED`.
-- Required `critical_auditor` unavailable: `CRITICAL_REVIEW_BLOCKED`.
-
-Auditor failure, auth failure, timeout, or missing response is not approval.
-
-## Commit Pinning
-
-Every audit must identify the exact audited commit SHA. Approval of commit A does not approve commit B. Any relevant change after audit creates a new HEAD and requires re-audit according to scope.
+`TASK_APPROVED` advances only for the exact audited HEAD. `FIX_REQUIRED` creates a new RED for the finding, a minimal fix, a new immutable attempt, and re-audit. `MAX_AUTOMATIC_FIX_ATTEMPTS = 3`; after that, escalate to Gemini High.
 
 ## Audit Package
 
-Include only relevant evidence:
+The bridge records exact base/head/tree identity, manifest, Git status and log, separated production/test/contract diffs, test output, TDD evidence, prompt, raw auditor output, normalized verdict, and a deterministic package ID. Runtime artifacts are outside the worktree. Every attempt is immutable.
 
-- Task id and task/spec section.
-- Exact commit SHA.
-- Relevant diff.
-- Tests, commands, outputs, and exit codes.
-- Invariants and acceptance criteria.
-- Prior finding when requesting re-audit.
+## Auditor Verdict Contract
 
-For critical review, include the primary finding and instruct `critical_auditor` to verify independently.
+AGY runs headlessly with read-only sandbox access, explicit package/repository directories, strict JSON schema validation, and no `command(*)`, `--dangerously-skip-permissions`, or edit mode. The normalized verdict is `TASK_APPROVED`, `FIX_REQUIRED`, or `ARCHITECTURE_STOP`.
 
-## Normalized Audit Result
+## Stop Taxonomy
 
-Auditor output may be prose, but it must be normalizable to:
+- `AUDITOR_INFRA_STOP`: AGY cannot reliably run, authenticate, return output, or satisfy the schema after bounded retries.
+- `REPOSITORY_SAFETY_STOP`: dirty or mismatched Git state, invalid SHAs, unsafe runtime placement, or other evidence hazards.
+- `ARCHITECTURE_STOP`: frozen contract, protected golden/fingerprint, or architectural meaning requires a ruling.
 
-```json
-{
-  "verdict": "APPROVED | FIX_REQUIRED | ARCHITECTURE_STOP",
-  "severity": "NONE | LOW | MEDIUM | HIGH | CRITICAL",
-  "task_id": "string",
-  "audited_commit": "sha",
-  "findings": []
-}
-```
+Stops fail closed. No normal task advances through a stop.
 
-Do not proceed unless these fields are unambiguous.
+## Protected Contracts
 
-## Limits
+Frozen specs, approved contract-bearing plans, scientific identity goldens, and historical fingerprints are protected. A protected contract change is `ARCHITECTURE_STOP`; passing tests never override it.
 
-This skill does not authorize push, merge, release, or deploy. Those actions require separate authorization.
+## Test Anti-Gaming
 
-`ARCHITECTURE_STOP`, unresolved critical findings, unresolved material disagreement, and auditor unavailability block progress.
+Modified, deleted, and new tests are surfaced separately. Removing assertions, weakening expected values, deleting contract coverage, or silently rebaselining fingerprints is a finding. A finding must be reproduced by a regression test before the fix is accepted.
+
+## Final Push and PR Policy
+
+Only a final AGY Gemini High approval on the exact HEAD permits `git push` and PR creation. The gate never runs merge, auto-merge, force-push, rebase, or squash commands. Merge is never automatic.
+
+## Aurum V1.6 Closeout
+
+Aurum V1.6 closeout is the first real integration case. Its closeout must use the same immutable package, exact HEAD binding, independent final audit, stop taxonomy, and push-plus-PR gate.
