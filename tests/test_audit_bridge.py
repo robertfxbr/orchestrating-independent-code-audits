@@ -13,6 +13,8 @@ from scripts.audit_bridge import (
     classify_changed_file,
     _diff_for_paths,
     main,
+    render_auditor_prompt,
+    run_agy_audit,
 )
 
 
@@ -135,6 +137,40 @@ def test_protected_contract_paths_are_classified_for_auditor_evidence():
         )
         == "PROTECTED_CONTRACT"
     )
+
+
+def test_task_prompt_enforces_read_only_shell_prohibition(tmp_path):
+    package_dir = tmp_path / "attempt-01"
+    package_dir.mkdir()
+    (package_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+    prompt = render_auditor_prompt("task", package_dir, "Gemini 3.8 Flash Medium")
+
+    assert "You are an independent READ-ONLY code auditor." in prompt
+    assert "DO NOT:" in prompt
+    assert "execute shell commands" in prompt
+    assert "write files" in prompt
+    assert "Return only the required verdict JSON." in prompt
+
+
+def test_agy_invocation_uses_model_and_never_accepts_edits(
+    fake_agy_runner, bridge_config, tmp_path
+):
+    package_dir = tmp_path / "attempt-01"
+    package_dir.mkdir()
+    fake_agy_runner.output = (
+        '{"verdict":"TASK_APPROVED","spec_compliance":"APPROVED",'
+        '"code_quality":"APPROVED","test_evidence":"PASS",'
+        '"architecture_stop":false,"findings":[],"confidence":"MEDIUM"}'
+    )
+
+    run_agy_audit(bridge_config.with_agy_runner(fake_agy_runner), package_dir, "task")
+
+    command = " ".join(fake_agy_runner.last_command)
+    assert "Gemini 3.8 Flash Medium" in command
+    assert "--dangerously-skip-permissions" not in command
+    assert "--mode=accept-edits" not in command
+    assert fake_agy_runner.last_cwd == package_dir
 
 
 def test_contract_diff_evidence_preserves_protected_change(tmp_path, git_repo):

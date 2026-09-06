@@ -42,3 +42,27 @@ class GitRepo:
 @pytest.fixture
 def git_repo(tmp_path) -> GitRepo:
     return GitRepo(tmp_path / "repo")
+
+
+class FakeAgyRunner:
+    def __init__(self) -> None:
+        self.output = ""
+        self.last_command: list[str] = []
+        self.last_cwd: Path | None = None
+
+    def run(self, command: list[str], cwd: Path) -> str:
+        self.last_command = command
+        self.last_cwd = cwd
+        return self.output
+
+
+@pytest.fixture
+def fake_agy_runner() -> FakeAgyRunner:
+    return FakeAgyRunner()
+
+
+@pytest.fixture
+def bridge_config(tmp_path) -> object:
+    from scripts.audit_bridge import BridgeConfig
+
+    return BridgeConfig.from_env().with_runtime_root(tmp_path / "runtime")

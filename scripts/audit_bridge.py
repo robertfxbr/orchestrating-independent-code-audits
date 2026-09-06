@@ -45,6 +45,7 @@ class BridgeConfig:
     high_model: str
     final_model: str
     protected_contract_files: tuple[str, ...] = ()
+    agy_runner: object | None = None
 
     @classmethod
     def from_env(cls) -> "BridgeConfig":
@@ -55,6 +56,7 @@ class BridgeConfig:
             task_model="Gemini 3.8 Flash Medium",
             high_model="Gemini 3.8 Flash High",
             final_model="Gemini 3.8 Flash High",
+            agy_runner=None,
         )
 
     def with_runtime_root(self, runtime_root: Path) -> "BridgeConfig":
@@ -65,6 +67,7 @@ class BridgeConfig:
             high_model=self.high_model,
             final_model=self.final_model,
             protected_contract_files=self.protected_contract_files,
+            agy_runner=self.agy_runner,
         )
 
     def with_protected_contract_files(self, protected_contract_files: tuple[str, ...]) -> "BridgeConfig":
@@ -75,6 +78,18 @@ class BridgeConfig:
             high_model=self.high_model,
             final_model=self.final_model,
             protected_contract_files=protected_contract_files,
+            agy_runner=self.agy_runner,
+        )
+
+    def with_agy_runner(self, agy_runner: object) -> "BridgeConfig":
+        return BridgeConfig(
+            runtime_root=self.runtime_root,
+            agy_command=self.agy_command,
+            task_model=self.task_model,
+            high_model=self.high_model,
+            final_model=self.final_model,
+            protected_contract_files=self.protected_contract_files,
+            agy_runner=agy_runner,
         )
 
 
@@ -322,6 +337,53 @@ def parse_auditor_output(raw_output: str, schema_path: Path) -> dict[str, object
         raise AuditorFailure(f"invalid auditor verdict: {exc}") from exc
 
     return payload
+
+
+def render_auditor_prompt(kind: str, package_dir: Path, model: str) -> str:
+    template_path = Path(__file__).resolve().parent.parent / "prompts" / f"{kind}_audit.md"
+    if kind not in {"task", "escalation", "final_phase"}:
+        raise ValueError(f"unsupported auditor prompt kind: {kind}")
+    template = template_path.read_text(encoding="utf-8")
+    return template.format(package_dir=package_dir, model=model)
+
+
+def run_agy_audit(config: BridgeConfig, package_dir: Path, prompt_kind: str) -> str:
+    model = {
+        "task": config.task_model,
+        "escalation": config.high_model,
+        "final_phase": config.final_model,
+    }[prompt_kind]
+    prompt = render_auditor_prompt(prompt_kind, package_dir, model)
+    prompt_path = package_dir / "agy-prompt.txt"
+    prompt_path.write_text(prompt, encoding="utf-8")
+    command = [
+        *config.agy_command,
+        "--model",
+        model,
+        "--sandbox",
+        "--add-dir",
+        str(package_dir),
+        "--output-format",
+        "json",
+        "--json-schema",
+        str(package_dir / "auditor_verdict.schema.json"),
+        "--print",
+        prompt,
+    ]
+    if config.agy_runner is not None:
+        return config.agy_runner.run(command, package_dir)
+    completed = subprocess.run(
+        command,
+        cwd=package_dir,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise AuditorFailure(
+            f"AGY exited with status {completed.returncode}: {completed.stderr.strip()}"
+        )
+    return completed.stdout
 
 
 def build_parser() -> argparse.ArgumentParser:
