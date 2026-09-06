@@ -23,6 +23,12 @@ class AttemptAlreadyExistsError(Exception):
         self.status = "REPOSITORY_SAFETY_STOP"
 
 
+class RepositorySafetyStop(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.status = "REPOSITORY_SAFETY_STOP"
+
+
 @dataclass(frozen=True)
 class BridgeConfig:
     runtime_root: Path
@@ -160,8 +166,47 @@ def _diff_for_paths(worktree: Path, base_sha: str, head_sha: str, paths: list[st
     return "".join(_run_git(worktree, "diff", base_sha, head_sha, "--", path) for path in paths)
 
 
+def detect_repository_safety_stop(
+    worktree: Path,
+    base_sha: str,
+    head_sha: str,
+    protected_contract_files: tuple[str, ...],
+    runtime_root: Path,
+) -> None:
+    porcelain = _run_git(worktree, "status", "--porcelain")
+    if porcelain.strip():
+        raise RepositorySafetyStop("unexpected dirty worktree affects audit evidence")
+
+    _run_git(worktree, "rev-parse", f"{base_sha}^{{commit}}")
+    _run_git(worktree, "rev-parse", f"{head_sha}^{{commit}}")
+    current_head = _run_git(worktree, "rev-parse", "HEAD").strip()
+    if current_head != head_sha:
+        raise RepositorySafetyStop("current HEAD differs from requested audited HEAD")
+
+    changed_paths = [
+        line.split()[-1]
+        for line in _run_git(worktree, "diff", "--name-status", base_sha, head_sha).splitlines()
+        if line.strip()
+    ]
+    for path in changed_paths:
+        if classify_changed_file(path, "M", protected_contract_files) == "PROTECTED_CONTRACT":
+            raise RepositorySafetyStop(f"protected contract changed: {path}")
+
+    resolved_worktree = worktree.resolve()
+    resolved_runtime = runtime_root.resolve()
+    if resolved_worktree == resolved_runtime or resolved_worktree in resolved_runtime.parents:
+        raise RepositorySafetyStop("runtime root resolves inside audited worktree")
+
+
 def build_audit_package(config: BridgeConfig, request: AuditRequest) -> BridgeResult:
     worktree = _request_worktree(request)
+    detect_repository_safety_stop(
+        worktree,
+        request.base_sha,
+        request.head_sha,
+        config.protected_contract_files,
+        config.runtime_root,
+    )
     state = collect_git_state(worktree, request.base_sha, request.head_sha)
     attempt_dir = _attempt_dir(config, state, request)
     if attempt_dir.exists():
