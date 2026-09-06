@@ -71,6 +71,8 @@ class BridgeConfig:
     final_model: str
     protected_contract_files: tuple[str, ...] = ()
     agy_runner: object | None = None
+    git_runner: object | None = None
+    gh_runner: object | None = None
 
     @classmethod
     def from_env(cls) -> "BridgeConfig":
@@ -82,6 +84,8 @@ class BridgeConfig:
             high_model="Gemini 3.8 Flash High",
             final_model="Gemini 3.8 Flash High",
             agy_runner=None,
+            git_runner=None,
+            gh_runner=None,
         )
 
     def with_runtime_root(self, runtime_root: Path) -> "BridgeConfig":
@@ -93,6 +97,8 @@ class BridgeConfig:
             final_model=self.final_model,
             protected_contract_files=self.protected_contract_files,
             agy_runner=self.agy_runner,
+            git_runner=self.git_runner,
+            gh_runner=self.gh_runner,
         )
 
     def with_protected_contract_files(self, protected_contract_files: tuple[str, ...]) -> "BridgeConfig":
@@ -104,6 +110,8 @@ class BridgeConfig:
             final_model=self.final_model,
             protected_contract_files=protected_contract_files,
             agy_runner=self.agy_runner,
+            git_runner=self.git_runner,
+            gh_runner=self.gh_runner,
         )
 
     def with_agy_runner(self, agy_runner: object) -> "BridgeConfig":
@@ -115,6 +123,34 @@ class BridgeConfig:
             final_model=self.final_model,
             protected_contract_files=self.protected_contract_files,
             agy_runner=agy_runner,
+            git_runner=self.git_runner,
+            gh_runner=self.gh_runner,
+        )
+
+    def with_git_runner(self, git_runner: object) -> "BridgeConfig":
+        return BridgeConfig(
+            runtime_root=self.runtime_root,
+            agy_command=self.agy_command,
+            task_model=self.task_model,
+            high_model=self.high_model,
+            final_model=self.final_model,
+            protected_contract_files=self.protected_contract_files,
+            agy_runner=self.agy_runner,
+            git_runner=git_runner,
+            gh_runner=self.gh_runner,
+        )
+
+    def with_gh_runner(self, gh_runner: object) -> "BridgeConfig":
+        return BridgeConfig(
+            runtime_root=self.runtime_root,
+            agy_command=self.agy_command,
+            task_model=self.task_model,
+            high_model=self.high_model,
+            final_model=self.final_model,
+            protected_contract_files=self.protected_contract_files,
+            agy_runner=self.agy_runner,
+            git_runner=self.git_runner,
+            gh_runner=gh_runner,
         )
 
 
@@ -517,6 +553,58 @@ def write_normalized_verdict(
     target = package_dir / "auditor-verdict.json"
     target.write_text(json.dumps(verdict, indent=2, sort_keys=True), encoding="utf-8")
     return target
+
+
+def finalize_after_approval(
+    config: BridgeConfig,
+    package_dir: Path,
+    remote: str,
+    branch: str,
+    pr_title: str,
+    pr_body: str,
+) -> BridgeResult:
+    verdict = json.loads((package_dir / "auditor-verdict.json").read_text(encoding="utf-8"))
+    approved = (
+        verdict.get("verdict") == "TASK_APPROVED"
+        and verdict.get("spec_compliance") == "APPROVED"
+        and verdict.get("code_quality") == "APPROVED"
+        and verdict.get("test_evidence") == "PASS"
+        and verdict.get("architecture_stop") is False
+        and verdict.get("confidence") == "HIGH"
+        and verdict.get("prompt_kind") in {"final", "final_phase"}
+        and branch not in {"main", "master"}
+    )
+    if not approved:
+        return BridgeResult(
+            "REPOSITORY_SAFETY_STOP",
+            package_dir,
+            None,
+            "push and PR require final High approval on a feature branch",
+        )
+
+    git_command = ["git", "push", remote, branch]
+    gh_command = [
+        "gh",
+        "pr",
+        "create",
+        "--base",
+        "main",
+        "--head",
+        branch,
+        "--title",
+        pr_title,
+        "--body",
+        pr_body,
+    ]
+    if config.git_runner is not None:
+        config.git_runner.run(git_command, package_dir)
+    else:
+        subprocess.run(git_command, cwd=package_dir, check=True)
+    if config.gh_runner is not None:
+        config.gh_runner.run(gh_command, package_dir)
+    else:
+        subprocess.run(gh_command, cwd=package_dir, check=True)
+    return BridgeResult("PR_CREATED", package_dir, None, "branch pushed and pull request created")
 
 
 def build_parser() -> argparse.ArgumentParser:

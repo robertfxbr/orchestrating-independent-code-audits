@@ -64,9 +64,28 @@ class FakeAgyRunner:
         return self.output
 
 
+class FakeCommandRunner:
+    def __init__(self) -> None:
+        self.commands: list[list[str]] = []
+
+    def run(self, command: list[str], cwd: Path | None = None) -> str:
+        self.commands.append(command)
+        return ""
+
+
 @pytest.fixture
 def fake_agy_runner() -> FakeAgyRunner:
     return FakeAgyRunner()
+
+
+@pytest.fixture
+def fake_git_runner() -> FakeCommandRunner:
+    return FakeCommandRunner()
+
+
+@pytest.fixture
+def fake_gh_runner() -> FakeCommandRunner:
+    return FakeCommandRunner()
 
 
 @pytest.fixture
