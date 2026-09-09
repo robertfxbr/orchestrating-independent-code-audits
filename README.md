@@ -133,8 +133,15 @@ python -m scripts.audit_bridge finalize `
   --base-sha <BASE_SHA> `
   --head-sha <HEAD_SHA> `
   --spec-path docs/superpowers/specs/2026-09-06-orchestrating-independent-code-audits-design.md `
-  --plan-path docs/superpowers/plans/2026-09-06-orchestrating-independent-code-audits.md
+  --plan-path docs/superpowers/plans/2026-09-06-orchestrating-independent-code-audits.md `
+  --pr-title "Independent audit bridge" `
+  --pr-body-file <PR_BODY_FILE>
 ```
+
+Use `--test-output-path` and `--tdd-evidence-path` to include validation evidence.
+`--runtime-root` selects an external evidence directory for a new immutable attempt.
+The installed AGY model identifiers are `Gemini 3.8 Flash (Medium)` and
+`Gemini 3.8 Flash (High)`; these implement the policy labels above without a provider change.
 
 No merge command is run by this project. The user retains merge authority.
 

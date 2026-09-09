@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -394,6 +395,10 @@ def parse_auditor_output(raw_output: str, schema_path: Path) -> dict[str, object
 
     try:
         payload = json.loads(raw_output)
+        if isinstance(payload, dict) and "status" in payload:
+            if payload["status"] != "SUCCESS" or "structured_output" not in payload:
+                raise AuditorFailure("AGY returned an error or incomplete response")
+            payload = payload["structured_output"]
         validate(instance=payload, schema=load_schema(schema_path))
     except (json.JSONDecodeError, ValidationError) as exc:
         raise AuditorFailure(f"invalid auditor verdict: {exc}") from exc
@@ -421,7 +426,10 @@ def run_agy_audit(config: BridgeConfig, package_dir: Path, prompt_kind: str) -> 
     command = [
         *config.agy_command,
         "--model",
-        model,
+        {"Gemini 3.8 Flash Medium": "Gemini 3.8 Flash (Medium)",
+         "Gemini 3.8 Flash High": "Gemini 3.8 Flash (High)"}.get(model, model),
+        "--mode",
+        "plan",
         "--sandbox",
         "--add-dir",
         str(package_dir),
@@ -432,6 +440,11 @@ def run_agy_audit(config: BridgeConfig, package_dir: Path, prompt_kind: str) -> 
         "--print",
         prompt,
     ]
+    manifest_path = package_dir / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("worktree"):
+            command.extend(["--add-dir", manifest["worktree"]])
     if config.agy_runner is not None:
         return config.agy_runner.run(command, package_dir)
     completed = subprocess.run(
@@ -455,14 +468,21 @@ def run_audit_with_retries(
     schema_path: Path,
 ) -> BridgeResult:
     last_output = ""
-    for _ in range(MAX_AUDITOR_RETRIES + 1):
+    for attempt in range(MAX_AUDITOR_RETRIES + 1):
         try:
             last_output = run_agy_audit(config, package_dir, prompt_kind)
+            (package_dir / f"agy-output-{attempt + 1}.txt").write_text(last_output, encoding="utf-8")
+            (package_dir / "agy-raw-output.txt").write_text(last_output, encoding="utf-8")
             verdict = parse_auditor_output(last_output, schema_path)
+            manifest = json.loads((package_dir / "manifest.json").read_text(encoding="utf-8"))
+            head_sha = manifest["head_sha"]
+            verdict["prompt_kind"] = prompt_kind
+            write_normalized_verdict(package_dir, verdict, head_sha)
+            routed = route_verdict(verdict, fix_attempt_count=0)
             return BridgeResult(
-                status="TASK_APPROVED",
+                status=routed.status,
                 attempt_dir=package_dir,
-                head_sha=str(verdict.get("head_sha")) if verdict.get("head_sha") else None,
+                head_sha=head_sha,
                 message="auditor verdict accepted",
             )
         except (AuditorFailure, TimeoutError, OSError):
@@ -662,16 +682,55 @@ V1.7 must not begin until V1.6 operational closeout is resolved and merged.
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="audit_bridge")
     subcommands = parser.add_subparsers(dest="command", required=True)
-    subcommands.add_parser("package")
-    subcommands.add_parser("audit")
-    subcommands.add_parser("finalize")
+    for name in ("package", "audit", "finalize"):
+        command = subcommands.add_parser(name)
+        for flag in ("phase", "task-id", "base-sha", "head-sha"):
+            command.add_argument(f"--{flag}", required=True)
+        for flag in ("spec-path", "plan-path"):
+            command.add_argument(f"--{flag}", type=Path, required=True)
+        for flag in ("test-output-path", "tdd-evidence-path", "runtime-root"):
+            command.add_argument(f"--{flag}", type=Path)
+        if name == "finalize":
+            command.add_argument("--remote", default="origin")
+            command.add_argument("--pr-title", required=True)
+            command.add_argument("--pr-body-file", type=Path, required=True)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     try:
-        parser.parse_args(argv)
+        args = parser.parse_args(argv)
     except SystemExit as exc:
         return int(exc.code)
-    return 0
+    try:
+        config = BridgeConfig.from_env()
+        if args.runtime_root:
+            config = config.with_runtime_root(args.runtime_root.resolve())
+        request = AuditRequest(args.phase, args.task_id, args.base_sha, args.head_sha,
+                               args.spec_path.resolve(), args.plan_path.resolve(),
+                               args.test_output_path, args.tdd_evidence_path)
+        result = build_audit_package(config, request)
+        package = result.attempt_dir
+        if args.command != "package":
+            schema = package / "auditor_verdict.schema.json"
+            shutil.copyfile(Path(__file__).resolve().parent.parent / "schemas/auditor_verdict.schema.json", schema)
+            result = run_audit_with_retries(config, package,
+                                           "final_phase" if args.command == "finalize" else "task", schema)
+        if args.command == "finalize" and result.status == "TASK_APPROVED":
+            manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
+            result = finalize_after_approval(config, package, args.remote, manifest["branch"],
+                                            args.pr_title, args.pr_body_file.read_text(encoding="utf-8"))
+    except (RepositorySafetyStop, ArchitectureStop, AttemptAlreadyExistsError,
+            AuditProvenanceInvalid, AuditorFailure) as exc:
+        result = BridgeResult(exc.status, None, None, str(exc))
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
+        result = BridgeResult("REPOSITORY_SAFETY_STOP", None, None, str(exc))
+    print(json.dumps({"status": result.status, "head_sha": result.head_sha,
+                      "attempt_dir": str(result.attempt_dir) if result.attempt_dir else None,
+                      "message": result.message}))
+    return 0 if result.status in {"PACKAGE_CREATED", "TASK_APPROVED", "PR_CREATED"} else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -170,7 +170,7 @@ def test_agy_invocation_uses_model_and_never_accepts_edits(
     run_agy_audit(bridge_config.with_agy_runner(fake_agy_runner), package_dir, "task")
 
     command = " ".join(fake_agy_runner.last_command)
-    assert "Gemini 3.8 Flash Medium" in command
+    assert "Gemini 3.8 Flash (Medium)" in command
     assert "--dangerously-skip-permissions" not in command
     assert "--mode=accept-edits" not in command
     assert fake_agy_runner.last_cwd == package_dir
