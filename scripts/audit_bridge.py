@@ -564,13 +564,21 @@ def finalize_after_approval(
     pr_title: str,
     pr_body: str,
 ) -> BridgeResult:
-    verdict = json.loads((package_dir / "auditor-verdict.json").read_text(encoding="utf-8"))
-    manifest_path = package_dir / "manifest.json"
-    audited_worktree = package_dir
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest.get("worktree"):
-            audited_worktree = Path(manifest["worktree"])
+    try:
+        verdict = json.loads((package_dir / "auditor-verdict.json").read_text(encoding="utf-8"))
+        manifest = json.loads((package_dir / "manifest.json").read_text(encoding="utf-8"))
+        audited_worktree = Path(manifest["worktree"])
+        current_head = _run_git(audited_worktree, "rev-parse", "HEAD").strip()
+        current_tree = _run_git(audited_worktree, "rev-parse", "HEAD^{tree}").strip()
+        current_branch = _run_git(audited_worktree, "branch", "--show-current").strip()
+        if (current_head != manifest["head_sha"]
+                or current_tree != manifest["tree_sha"]
+                or current_branch != branch or manifest["branch"] != branch
+                or _run_git(audited_worktree, "status", "--porcelain").strip()):
+            raise RepositorySafetyStop("current Git state differs from final audited state")
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError,
+            RepositorySafetyStop) as exc:
+        return BridgeResult("REPOSITORY_SAFETY_STOP", package_dir, None, str(exc))
     approved = (
         verdict.get("verdict") == "TASK_APPROVED"
         and verdict.get("spec_compliance") == "APPROVED"

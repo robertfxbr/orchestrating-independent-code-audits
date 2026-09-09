@@ -17,6 +17,7 @@ from scripts.audit_bridge import (
     run_agy_audit,
     finalize_after_approval,
     build_aurum_v16_closeout_request,
+    _run_git,
 )
 
 
@@ -176,10 +177,18 @@ def test_agy_invocation_uses_model_and_never_accepts_edits(
 
 
 def test_finalize_pushes_and_creates_pr_only_after_high_final_approval(
-    fake_git_runner, fake_gh_runner, bridge_config, tmp_path
+    fake_git_runner, fake_gh_runner, bridge_config, tmp_path, git_repo
 ):
     package_dir = tmp_path / "attempt-01"
     package_dir.mkdir()
+    git_repo.write_file("source.py", "value = 1\n")
+    git_repo.commit_all("audited")
+    _run_git(git_repo.path, "checkout", "-b", "feature/audit-bridge")
+    (package_dir / "manifest.json").write_text(json.dumps({
+        "worktree": str(git_repo.path), "head_sha": git_repo.head(),
+        "tree_sha": _run_git(git_repo.path, "rev-parse", "HEAD^{tree}").strip(),
+        "branch": "feature/audit-bridge",
+    }), encoding="utf-8")
     (package_dir / "auditor-verdict.json").write_text(
         '{"verdict":"TASK_APPROVED","spec_compliance":"APPROVED",'
         '"code_quality":"APPROVED","test_evidence":"PASS",'
@@ -230,14 +239,18 @@ def test_finalize_refuses_merge_or_non_final_approval(
 
 
 def test_finalize_runs_git_and_gh_from_audited_worktree(
-    fake_git_runner, fake_gh_runner, bridge_config, tmp_path
+    fake_git_runner, fake_gh_runner, bridge_config, tmp_path, git_repo
 ):
     package_dir = tmp_path / "attempt-01"
     package_dir.mkdir()
-    audited_worktree = tmp_path / "audited-worktree"
-    audited_worktree.mkdir()
+    audited_worktree = git_repo.path
+    git_repo.write_file("source.py", "value = 1\n")
+    git_repo.commit_all("audited")
+    _run_git(git_repo.path, "checkout", "-b", "feature/audit-bridge")
     (package_dir / "manifest.json").write_text(
-        json.dumps({"worktree": str(audited_worktree)}), encoding="utf-8"
+        json.dumps({"worktree": str(audited_worktree), "head_sha": git_repo.head(),
+                    "tree_sha": _run_git(git_repo.path, "rev-parse", "HEAD^{tree}").strip(),
+                    "branch": "feature/audit-bridge"}), encoding="utf-8"
     )
     (package_dir / "auditor-verdict.json").write_text(
         '{"verdict":"TASK_APPROVED","spec_compliance":"APPROVED",'
