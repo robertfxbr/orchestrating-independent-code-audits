@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "spec_compliance",
+    "code_quality",
+    "test_evidence",
+    "architecture_stop",
+    "findings",
+    "confidence"
+  ],
+  "properties": {
+    "verdict": {
+      "enum": ["TASK_APPROVED", "FIX_REQUIRED", "ARCHITECTURE_STOP"]
+    },
+    "spec_compliance": {
+      "enum": ["APPROVED", "CHANGES_REQUIRED", "ARCHITECTURE_STOP"]
+    },
+    "code_quality": {
+      "enum": ["APPROVED", "CHANGES_REQUIRED"]
+    },
+    "test_evidence": {
+      "enum": ["PASS", "INSUFFICIENT", "FAIL"]
+    },
+    "architecture_stop": {
+      "type": "boolean"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "contract",
+          "file",
+          "line",
+          "evidence",
+          "required_proof"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+          },
+          "contract": {
+            "type": "string",
+            "minLength": 1
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required_proof": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "confidence": {
+      "enum": ["LOW", "MEDIUM", "HIGH"]
+    }
+  }
+}

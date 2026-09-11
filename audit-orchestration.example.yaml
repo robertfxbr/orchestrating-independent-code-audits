@@ -1,0 +1,29 @@
+version: 1
+
+roles:
+  implementer: codex
+  primary_auditor: gemini
+  critical_auditor: claude
+  ruling_authority: user
+
+providers:
+  codex:
+    command: null
+  gemini:
+    command: null
+  claude:
+    command: null
+
+critical_policy:
+  trigger_on_primary_severity:
+    - CRITICAL
+
+  always_critical_tasks: []
+
+fallbacks:
+  primary_auditor: null
+  critical_auditor: null
+
+independence:
+  require_implementer_different_from_primary_auditor: true
+  require_critical_auditor_different_from_implementer: true
