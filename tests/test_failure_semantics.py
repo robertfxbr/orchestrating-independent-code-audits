@@ -119,6 +119,40 @@ def test_fix_required_routes_to_tdd_fix_until_limit():
     assert route_verdict(verdict, fix_attempt_count=3).status == "ESCALATE_TO_HIGH_REVIEW"
 
 
+@pytest.mark.parametrize(
+    ("verdict_value", "architecture_flag", "severity"),
+    [
+        ("TASK_APPROVED", False, "CRITICAL"),
+        ("FIX_REQUIRED", False, "CRITICAL"),
+        ("TASK_APPROVED", True, "LOW"),
+    ],
+)
+def test_critical_finding_or_architecture_flag_stops_for_human_ruling(verdict_value, architecture_flag, severity):
+    verdict = {
+        "verdict": verdict_value,
+        "spec_compliance": "APPROVED",
+        "code_quality": "APPROVED",
+        "test_evidence": "PASS",
+        "architecture_stop": architecture_flag,
+        "findings": [
+            {
+                "id": "F-02",
+                "severity": severity,
+                "contract": "protected contract",
+                "file": "scripts/audit_bridge.py",
+                "line": 1,
+                "evidence": "contract changed",
+                "required_proof": "architecture ruling",
+            }
+        ],
+        "confidence": "HIGH",
+    }
+
+    result = route_verdict(verdict, fix_attempt_count=0)
+
+    assert result.status == ARCHITECTURE_STOP
+
+
 def test_architecture_stop_writes_required_artifact(tmp_path, audit_request):
     finding = {
         "id": "F-99",
