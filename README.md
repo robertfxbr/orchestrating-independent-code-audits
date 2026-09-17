@@ -4,6 +4,37 @@ A provider-agnostic process skill for software work where the implementer must n
 
 It defines canonical roles for implementation, primary audit, critical audit, and architecture ruling, then keeps those roles independent even when the concrete providers change.
 
+[![CI](https://github.com/robertfxbr/orchestrating-independent-code-audits/actions/workflows/ci.yml/badge.svg)](https://github.com/robertfxbr/orchestrating-independent-code-audits/actions/workflows/ci.yml)
+
+## Rejected
+
+What the workflow refuses to do. Each item is one of the seven failure scenarios in
+[`PRESSURE_TESTS.md`](PRESSURE_TESTS.md), written before the rules that prevent them.
+
+- **Self-approval.** Passing tests are not approval. The implementer never approves its own code, even when the auditor is slow.
+- **Treating a missing auditor as optional.** An auditor that fails to authenticate or time out blocks the task as `TASK_APPROVAL_BLOCKED`; it never counts as a pass.
+- **Patching a finding directly.** Every finding is reproduced by a failing regression test before the fix.
+- **Workflow logic that depends on a provider.** Roles drive behavior. Swapping which agent implements and which audits changes configuration, not the flow.
+- **Carrying approval forward.** Approval belongs to an exact commit SHA. A later HEAD is unapproved until audited.
+- **Picking the convenient verdict.** When the primary and critical auditors materially disagree, work stops for a human ruling (`ARCHITECTURE_STOP`).
+- **Merging.** No merge command exists in this project. Push and PR creation require a final approval; merge stays with the user.
+
+## Contract
+
+**In:** a Git worktree, the exact `--base-sha` and `--head-sha`, the frozen spec and the approved plan.
+
+**Out:** an immutable audit package written outside the repository (Git state, diff, test evidence, prompt, raw auditor output) and one routed status:
+`PACKAGE_CREATED`, `TASK_APPROVED`, `PR_CREATED`, or a fail-closed stop: `AUDITOR_INFRA_STOP`, `REPOSITORY_SAFETY_STOP`, `ARCHITECTURE_STOP`.
+Auditor output that does not match [`schemas/auditor_verdict.schema.json`](schemas/auditor_verdict.schema.json) is rejected, not interpreted.
+
+## Evidence
+
+- 38 tests, 92% line coverage on the bridge, CI on Python 3.11, 3.12 and 3.13 with a 90% coverage floor.
+- Tests drive real Git repositories in temporary directories and replace the auditor CLI and `gh` with fakes, so the suite needs no network, no credentials and no model calls.
+- Failure paths are tested directly: an auditor timeout never becomes `TASK_APPROVED`, malformed output is retried twice and then stops, a dirty worktree or invalid SHA blocks packaging, the final gate rejects a Git state that differs from the audited one, and a new attempt cannot overwrite earlier evidence.
+
+What the tests do not prove: the quality of a real model's review. They prove that the bridge packages evidence, validates verdicts and routes them without letting any path skip an audit.
+
 ## Install
 
 Copy the skill files into a global agent skills directory:
