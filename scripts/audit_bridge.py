@@ -17,8 +17,8 @@ from scripts.bindings import (
     BindingsInvalid,
     BindingsRequired,
     load_bindings,
-    unavailable_commands,
 )
+from scripts.preflight import all_auditors, check_auditors, run_check
 
 ARCHITECTURE_STOP = "ARCHITECTURE_STOP"
 
@@ -85,6 +85,8 @@ class BridgeConfig:
     git_runner: object | None = None
     gh_runner: object | None = None
     bindings: Bindings | None = None
+    check_runner: object | None = None
+    which: object | None = None
 
     @classmethod
     def from_env(cls) -> "BridgeConfig":
@@ -117,6 +119,9 @@ class BridgeConfig:
 
     def with_bindings(self, bindings: Bindings) -> "BridgeConfig":
         return replace(self, bindings=bindings)
+
+    def with_check_tools(self, check_runner: object, which: object) -> "BridgeConfig":
+        return replace(self, check_runner=check_runner, which=which)
 
 
 @dataclass(frozen=True)
@@ -475,8 +480,15 @@ def run_bound_audits(config: BridgeConfig, package_dir: Path, prompt_kind: str, 
     bindings = config.bindings
     manifest = json.loads((package_dir / "manifest.json").read_text(encoding="utf-8"))
     head_sha = manifest["head_sha"]
+    agents = bindings.auditors_for(prompt_kind)
+    checks = check_auditors(bindings, agents, run=config.check_runner or run_check, which=config.which or shutil.which)
+    (package_dir / "preflight.json").write_text(json.dumps([c.as_dict() for c in checks], indent=2), encoding="utf-8")
+    blocking = [c for c in checks if c.blocks]
+    if blocking:
+        return BridgeResult("AUDITOR_NOT_READY", package_dir, None,
+                            " | ".join(f"{c.agent}: {c.status}. {c.fix}" for c in blocking))
     verdicts: list[tuple[str, dict[str, object]]] = []
-    for agent in bindings.auditors_for(prompt_kind):
+    for agent in agents:
         provider = bindings.providers[agent]
         prompt = render_auditor_prompt(prompt_kind, package_dir, provider.model or agent)
         prompt_path = package_dir / f"auditor-{agent}-prompt.txt"
@@ -756,17 +768,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def check_bindings(path: Path, which=shutil.which) -> int:
-    """Validate a bindings file and check that every auditor command is on PATH, without running any."""
+def check_bindings(path: Path, run=run_check, which=shutil.which) -> int:
+    """Validate a bindings file, then confirm every auditor is installed, signed in and has its model.
+
+    Nothing is sent to a model: the checks are `claude auth status` and `agy models`.
+    """
+    auditors: list[dict[str, str]] = []
     try:
         bindings = load_bindings(path)
-        problems = unavailable_commands(bindings, which)
-        status = "BINDINGS_UNAVAILABLE" if problems else "BINDINGS_VALID"
+        checks = check_auditors(bindings, all_auditors(bindings), run=run, which=which)
+        auditors = [c.as_dict() for c in checks]
+        problems = [f"{c.agent}: {c.status}. {c.fix}" for c in checks if c.blocks]
+        status = "AUDITOR_NOT_READY" if problems else "BINDINGS_VALID"
     except BindingsRequired as exc:
         status, problems = exc.status, [str(exc)]
     except BindingsInvalid as exc:
         status, problems = exc.status, exc.errors
-    print(json.dumps({"status": status, "path": str(path), "problems": problems}))
+    print(json.dumps({"status": status, "path": str(path), "auditors": auditors, "problems": problems}))
     return 0 if status == "BINDINGS_VALID" else 1
 
 

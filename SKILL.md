@@ -29,7 +29,7 @@ Ask in this order:
    | `ruling_authority` | GPT-6 Astra, or GPT-5.6 Sol as an alternative; architectural rulings only | no, defaults to the user |
    | `merge_authority` | the user | always the user |
 
-2. **Ask which agents the user actually has installed and signed in, then check.** For each agent with a command, run a read-only check such as its version command. Report any mismatch between the answer and the check. A binding to an unavailable agent is not a valid binding.
+2. **Ask which agents the user actually has installed and signed in, then check.** Run `python -m scripts.audit_bridge check-bindings` once the file exists, or the same checks by hand before that: the command is on `PATH`, `claude auth status` shows `loggedIn: true`, `agy models` lists the chosen model. None of these sends a prompt. Report any mismatch between the answer and the check. A binding to an unavailable agent is not a valid binding.
    An agent without a command (`command: null`) is manual: the skill prepares the package, the user takes it to that agent, and the skill waits for the answer instead of calling anything.
 3. **Offer the three kinds of change:** keep as suggested, remove an optional role, or add auditors. Any role may be bound to a different agent.
 4. **Explain the consequence of each removal before accepting it:**
@@ -93,7 +93,9 @@ Only a final approval on the exact HEAD permits `git push` and PR creation: from
 
 ## Bundled Bridge
 
-`scripts/audit_bridge.py` reads `.agents/audit-orchestration.yaml` and refuses to audit without it (`BINDINGS_REQUIRED`) or with a binding that breaks the rules above (`BINDINGS_INVALID`). Run `check-bindings` after writing the file: it validates the rules and confirms each auditor's command is on `PATH` without running it.
+`scripts/audit_bridge.py` reads `.agents/audit-orchestration.yaml` and refuses to audit without it (`BINDINGS_REQUIRED`) or with a binding that breaks the rules above (`BINDINGS_INVALID`).
+
+Before calling any auditor, the bridge checks the auditors of that phase: installed, signed in, and able to use the bound model. If one is not ready it stops as `AUDITOR_NOT_READY` and names the fix. Relay that fix to the user in their language, wait for them to do it, and run the audit again. Never skip the check or swap the auditor to get past it.
 
 `audit` calls `primary_auditor` and every additional auditor; `escalate` and `finalize` call `critical_auditor` (or `primary_auditor` when none is bound) and every additional auditor. The bridge has adapters for `agy` and `claude`. An auditor without a command stops the bridge as `MANUAL_AUDIT_REQUIRED`; relay the written prompt and package to that agent. The bridge does not switch to `fallbacks` and does not read a manual verdict back yet.
 

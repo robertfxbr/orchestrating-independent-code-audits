@@ -71,6 +71,8 @@ def test_cli_audit_fix_required_never_publishes(git_repo, tmp_path, monkeypatch,
     claude_raw = json.dumps(dict(type='result', subtype='success', is_error=False,
                                  structured_output=json.loads(raw)['structured_output']))
     monkeypatch.setattr(bridge, '_invoke_auditor', lambda config, command, cwd: claude_raw)
+    monkeypatch.setattr(bridge, 'run_check', lambda command: (0, '{"loggedIn": true}'))
+    monkeypatch.setattr(bridge.shutil, 'which', lambda name: '/bin/' + name)
     def forbidden(*args, **kwargs):
         pytest.fail('publication is forbidden after FIX_REQUIRED')
     monkeypatch.setattr(bridge, 'finalize_after_approval', forbidden)

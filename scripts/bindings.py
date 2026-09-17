@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -149,15 +147,3 @@ def load_bindings(path: Path) -> Bindings:
     except yaml.YAMLError as exc:
         raise BindingsInvalid([f"not valid YAML: {exc}"]) from exc
     return parse_bindings(raw)
-
-
-def unavailable_commands(bindings: Bindings, which: Callable[[str], str | None] = shutil.which) -> list[str]:
-    """Auditors whose command is not on PATH. Read-only: nothing is executed."""
-    missing = []
-    for agent in dict.fromkeys([bindings.primary_auditor, bindings.critical_auditor, *bindings.additional_auditors]):
-        if agent is None:
-            continue
-        command = bindings.providers[agent].command
-        if command is not None and which(command) is None:
-            missing.append(f"{agent}: command {command!r} not found on PATH")
-    return missing

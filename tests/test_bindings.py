@@ -13,7 +13,6 @@ from scripts.bindings import (
     BindingsRequired,
     load_bindings,
     parse_bindings,
-    unavailable_commands,
     validate_bindings,
 )
 
@@ -47,6 +46,23 @@ def claude_output(v: dict) -> str:
                        "result": json.dumps(v), "structured_output": v})
 
 
+def ready_run(command: list[str]) -> tuple[int, str]:
+    if command[:3] == ["claude", "auth", "status"]:
+        return 0, '{"loggedIn": true}'
+    if command[:2] == ["agy", "models"]:
+        return 0, "gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\n"
+    raise AssertionError(f"unexpected check {command}")
+
+
+def on_path(name: str) -> str:
+    return "/bin/" + name
+
+
+def ready_everywhere(monkeypatch) -> None:
+    monkeypatch.setattr(bridge, "run_check", ready_run)
+    monkeypatch.setattr(bridge.shutil, "which", on_path)
+
+
 class RoutingRunner:
     """Answers per CLI, and records every command so tests can inspect the invocation."""
 
@@ -73,7 +89,7 @@ def package(tmp_path, schema_path):
 
 
 def run(bridge_config, package, raw, runner, kind="task"):
-    config = bridge_config.with_bindings(parse_bindings(raw)).with_agy_runner(runner)
+    config = bridge_config.with_bindings(parse_bindings(raw)).with_agy_runner(runner).with_check_tools(ready_run, on_path)
     return bridge.run_audit_with_retries(config, package, kind, package / "auditor_verdict.schema.json")
 
 
@@ -160,14 +176,6 @@ def test_without_critical_auditor_the_primary_gates_the_final_audit():
     bindings = parse_bindings(config_with(critical_auditor=None))
 
     assert bindings.auditors_for("final_phase") == ["agy-gemini-medium"]
-
-
-def test_unavailable_commands_are_reported_without_running_anything():
-    bindings = parse_bindings(EXAMPLE)
-
-    missing = unavailable_commands(bindings, which=lambda name: None if name == "claude" else "/bin/" + name)
-
-    assert missing == ["claude-opus-5: command 'claude' not found on PATH"]
 
 
 # --- bound audits ---------------------------------------------------------------
@@ -271,17 +279,19 @@ def last_json(capsys) -> dict:
 
 
 def test_check_bindings_reports_valid(tmp_path, capsys):
-    code = bridge.check_bindings(write(tmp_path, EXAMPLE), which=lambda name: "/bin/" + name)
+    code = bridge.check_bindings(write(tmp_path, EXAMPLE), run=ready_run, which=on_path)
 
     assert code == 0
     assert last_json(capsys)["status"] == "BINDINGS_VALID"
 
 
-def test_check_bindings_reports_unavailable_agents(tmp_path, capsys):
-    code = bridge.check_bindings(write(tmp_path, EXAMPLE), which=lambda name: None)
+def test_check_bindings_reports_auditors_that_are_not_ready(tmp_path, capsys):
+    code = bridge.check_bindings(write(tmp_path, EXAMPLE), run=ready_run, which=lambda name: None)
 
+    output = last_json(capsys)
     assert code == 1
-    assert last_json(capsys)["status"] == "BINDINGS_UNAVAILABLE"
+    assert output["status"] == "AUDITOR_NOT_READY"
+    assert {a["status"] for a in output["auditors"]} == {"NOT_INSTALLED"}
 
 
 def test_check_bindings_lists_every_broken_rule(tmp_path, capsys):
@@ -326,6 +336,7 @@ def test_cli_escalate_sends_the_package_to_the_critical_auditor(git_repo, tmp_pa
         return claude_output(verdict())
 
     monkeypatch.setattr(bridge, "_invoke_auditor", fake)
+    ready_everywhere(monkeypatch)
 
     code = bridge.main(["escalate", "--phase", "t", "--task-id", "esc", "--base-sha", head, "--head-sha", head,
                         "--spec-path", str(spec), "--plan-path", str(plan),
@@ -334,3 +345,18 @@ def test_cli_escalate_sends_the_package_to_the_critical_auditor(git_repo, tmp_pa
     assert code == 0
     assert called == ["claude"]
     assert last_json(capsys)["status"] == "TASK_APPROVED"
+
+
+def test_audit_does_not_start_when_an_auditor_is_signed_out(bridge_config, package):
+    runner = RoutingRunner({"claude": [claude_output(verdict())]})
+    signed_out = lambda command: (0, '{"loggedIn": false}')
+    config = (bridge_config.with_bindings(parse_bindings(EXAMPLE)).with_agy_runner(runner)
+              .with_check_tools(signed_out, on_path))
+
+    result = bridge.run_audit_with_retries(config, package, "final_phase", package / "auditor_verdict.schema.json")
+
+    assert result.status == "AUDITOR_NOT_READY"
+    assert "claude auth login" in result.message
+    assert runner.commands == []
+    assert json.loads((package / "preflight.json").read_text())[0]["status"] == "NOT_SIGNED_IN"
+    assert not (package / "auditor-verdict.json").exists()
