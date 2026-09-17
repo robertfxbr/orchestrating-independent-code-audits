@@ -49,6 +49,21 @@ Auditor output that does not match [`schemas/auditor_verdict.schema.json`](schem
 
 What the tests do not prove: the quality of a real model's review, or that the process rules above were followed. They prove that the bridge packages evidence, validates verdicts and gates publication on the paths listed in the table.
 
+## Development
+
+Requires Python 3.11 or newer and Git on `PATH`. The suite needs no network, no credentials and no auditor CLI.
+
+```bash
+git clone https://github.com/robertfxbr/orchestrating-independent-code-audits.git
+cd orchestrating-independent-code-audits
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scriptsctivate
+pip install -e ".[test]"
+pytest --cov=scripts --cov-report=term-missing
+```
+
+CI runs the same command on Python 3.11, 3.12 and 3.13 and fails below 90% coverage.
+
 ## The skill
 
 The sections from here to **Limits** describe the process skill. Where the bridge behaves differently, the section says so.
