@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+.venv*/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# local agent instructions, not part of the project
+.claude/
+CLAUDE.md
+.vscode/
+.idea/

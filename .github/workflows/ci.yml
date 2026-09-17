@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package and test dependencies
+        run: pip install -e ".[test]" pytest-cov
+
+      - name: Tests
+        run: pytest --cov=scripts --cov-report=term-missing --cov-fail-under=90
+
+      - name: Verdict schema is valid JSON Schema
+        run: |
+          python -c "import json, jsonschema; jsonschema.Draft202012Validator.check_schema(json.load(open('schemas/auditor_verdict.schema.json')))"
