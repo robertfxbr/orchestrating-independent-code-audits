@@ -42,7 +42,7 @@ The skill does not authorize push, merge, release, or deploy. It does not silent
 
 The suggested binding, offered on first use and changeable by the user:
 
-- Codex is the implementer; AGY with Gemini 3.8 Flash Medium is the primary auditor; AGY with Gemini 3.8 Flash High is the critical, escalation and final auditor; ChatGPT holds architectural rulings only; the user merges.
+- Codex is the implementer; AGY with Gemini 3.8 Flash Medium is the primary auditor; Claude Opus 5 is the critical, escalation and final auditor; GPT-6 Astra, or GPT-5.6 Sol as an alternative, holds architectural rulings only; the user merges.
 
 Independent of any binding:
 

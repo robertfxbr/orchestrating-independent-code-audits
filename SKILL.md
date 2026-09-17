@@ -14,6 +14,8 @@ Before any implementation, look for `.agents/audit-orchestration.yaml` in the pr
 - **If it exists and passes the binding rules below**, use it. Do not ask again.
 - **If it is missing or invalid**, stop and ask the user. Never assume a binding silently.
 
+Ask in the user's language. The file itself stays in English.
+
 Ask in this order:
 
 1. **Show the suggested binding** and say it is only a starting point:
@@ -22,17 +24,19 @@ Ask in this order:
    |---|---|---|
    | `implementer` | Codex | yes |
    | `primary_auditor` | AGY with Gemini 3.8 Flash Medium | yes |
-   | `critical_auditor` | AGY with Gemini 3.8 Flash High, also used for escalation and final audit | no |
+   | `critical_auditor` | Claude Opus 5, also used for escalation and final audit | no |
    | `additional_auditors` | none | no |
-   | `ruling_authority` | ChatGPT, architectural rulings only | no, defaults to the user |
+   | `ruling_authority` | GPT-6 Astra, or GPT-5.6 Sol as an alternative; architectural rulings only | no, defaults to the user |
    | `merge_authority` | the user | always the user |
 
-2. **Ask which agents the user actually has installed and signed in.** A binding to an unavailable agent is not a valid binding.
+2. **Ask which agents the user actually has installed and signed in, then check.** For each agent with a command, run a read-only check such as its version command. Report any mismatch between the answer and the check. A binding to an unavailable agent is not a valid binding.
+   An agent without a command (`command: null`) is manual: the skill prepares the package, the user takes it to that agent, and the skill waits for the answer instead of calling anything.
 3. **Offer the three kinds of change:** keep as suggested, remove an optional role, or add auditors. Any role may be bound to a different agent.
 4. **Explain the consequence of each removal before accepting it:**
    - Without `critical_auditor`, a critical finding goes straight to `ruling_authority` as `ARCHITECTURE_STOP`, and the final audit is done by `primary_auditor`.
    - Without `ruling_authority`, the user rules on every architectural stop and disagreement.
 5. **Validate the answer against the binding rules**, show the resulting file, and write `.agents/audit-orchestration.yaml` only after the user confirms it.
+6. **Ask whether to commit the file.** It holds no secrets. Committing it gives everyone on the project the same bindings; leaving it untracked lets each person choose their own.
 
 Change the bindings later only when the user asks. A binding that stops working is an `AUDITOR_INFRA_STOP`, not a reason to switch agents: fall back only to an agent the user listed under `fallbacks`.
 
@@ -89,7 +93,7 @@ Only a final approval on the exact HEAD permits `git push` and PR creation: from
 
 ## Bundled Bridge
 
-`scripts/audit_bridge.py` automates the suggested binding only: AGY with Gemini 3.8 Flash Medium for task audits and Gemini 3.8 Flash High for escalation and final audit. With any other binding, follow the same loop and stops, and run the audits through the chosen agents.
+`scripts/audit_bridge.py` does not read the bindings file. It automates task audits with AGY and Gemini 3.8 Flash Medium, the suggested `primary_auditor`, and runs its own escalation and final audit with AGY and Gemini 3.8 Flash High. That is not the suggested `critical_auditor`: with the suggested binding, run critical, escalation and final audits through Claude Opus 5 outside the bridge. With any other binding, follow the same loop and stops, and run the audits through the chosen agents.
 
 ## Aurum V1.6 Closeout
 

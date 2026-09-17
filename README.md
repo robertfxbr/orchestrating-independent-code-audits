@@ -32,7 +32,7 @@ What the workflow refuses to do. The cases come from the ten failure scenarios i
 - **Self-approval.** The implementer never approves its own code. The bridge makes approval come from the auditor's verdict, but it does not check who the implementer was.
 - **Patching a finding directly.** Every finding is reproduced by a failing regression test before the fix. The bridge records test evidence; it does not verify that a regression test came first.
 - **Picking the convenient verdict.** When the primary and critical auditors materially disagree, work stops for a human ruling. The bridge calls one auditor, so it cannot see a disagreement: a critical finding stops the task as `ARCHITECTURE_STOP` for a human, instead of going to a second auditor.
-- **Choosing agents for the user.** On first use the skill stops, suggests a binding, and asks which agents to keep, remove or add before writing `.agents/audit-orchestration.yaml`. No code checks this: the bridge does not read that file and automates only the suggested binding.
+- **Choosing agents for the user.** On first use the skill stops, suggests a binding, and asks which agents to keep, remove or add before writing `.agents/audit-orchestration.yaml`. No code checks this: the bridge does not read that file, and it automates only the primary audit of the suggested binding.
 - **Letting one dissenting auditor be outvoted.** With additional auditors, approval needs every configured auditor on the same HEAD. The bridge calls one auditor, so this rule applies only when the audits run through the chosen agents.
 
 ## Contract
@@ -83,10 +83,10 @@ Copy-Item .\SKILL.md,.\audit-orchestration.example.yaml,.\PRESSURE_TESTS.md "$en
 
 There is nothing to configure before first use. When a project has no `.agents/audit-orchestration.yaml`, the skill stops before implementing and walks the user through the bindings:
 
-1. It shows the suggested binding: Codex implements, AGY with Gemini 3.8 Flash Medium audits every task, AGY with Gemini 3.8 Flash High handles critical findings, escalation and the final audit, ChatGPT holds architectural rulings, and the user merges.
-2. It asks which agents are installed and signed in.
+1. It shows the suggested binding: Codex implements, AGY with Gemini 3.8 Flash Medium audits every task, Claude Opus 5 handles critical findings, escalation and the final audit, GPT-6 Astra (or GPT-5.6 Sol) holds architectural rulings, and the user merges.
+2. It asks which agents are installed and signed in, and checks each one that has a command. An agent without a command, such as the ruling model in the suggestion, is manual: the user relays the package and the answer.
 3. The user keeps the suggestion, removes optional roles (`critical_auditor`, `ruling_authority`), adds auditors, or rebinds any role. The skill explains what each removal changes and refuses bindings that break independence, such as an implementer that audits itself.
-4. After the user confirms, it writes the file and does not ask again.
+4. After the user confirms, it writes the file, asks whether to commit it, and does not ask again.
 
 The written file has this shape, shown here with the suggested binding ([`audit-orchestration.example.yaml`](audit-orchestration.example.yaml)):
 
@@ -98,9 +98,9 @@ version: 1
 roles:
   implementer: codex                      # required
   primary_auditor: agy-gemini-medium      # required, must differ from implementer
-  critical_auditor: agy-gemini-high       # optional: null sends critical findings to ruling_authority
+  critical_auditor: claude-opus-5         # optional: null sends critical findings to ruling_authority
   additional_auditors: []                 # optional: e.g. [claude]; each must approve the same HEAD
-  ruling_authority: chatgpt               # optional: null means the user rules
+  ruling_authority: gpt-6-astra           # optional: or gpt-5.6-sol; null means the user rules
   merge_authority: user                   # always the user
 
 providers:
@@ -109,11 +109,12 @@ providers:
   agy-gemini-medium:
     command: agy
     model: Gemini 3.8 Flash (Medium)
-  agy-gemini-high:
-    command: agy
-    model: Gemini 3.8 Flash (High)
-  chatgpt:
-    command: null
+  claude-opus-5:
+    command: claude
+    model: claude-opus-5
+  gpt-6-astra:
+    command: null                          # manual: the user relays the package and the ruling
+    model: GPT-6 Astra
 
 critical_policy:
   trigger_on_primary_severity:
@@ -192,7 +193,7 @@ python -m scripts.audit_bridge package `
 
 ### AGY Headless Read-Only Audit
 
-AGY uses Gemini 3.8 Flash Medium for normal task audits and Gemini 3.8 Flash High for escalation and final audits. It runs headlessly with sandboxed read-only access, explicit package/repository directories, and strict JSON schema validation. No command permission, edit mode, or dangerous permission bypass is allowed.
+AGY uses Gemini 3.8 Flash Medium for normal task audits and Gemini 3.8 Flash High for escalation and final audits. The High tier is the bridge's own escalation path; it is not the suggested `critical_auditor` (Claude Opus 5), whose audits run outside the bridge. It runs headlessly with sandboxed read-only access, explicit package/repository directories, and strict JSON schema validation. No command permission, edit mode, or dangerous permission bypass is allowed.
 
 ```powershell
 python -m scripts.audit_bridge audit `
