@@ -1,23 +1,37 @@
 # orchestrating-independent-code-audits
 
-A provider-agnostic process skill for software work where the implementer must not approve its own code.
+A process skill for software work where the implementer must not approve its own code, plus a Python bridge that enforces part of it.
 
-It defines canonical roles for implementation, primary audit, critical audit, and architecture ruling, then keeps those roles independent even when the concrete providers change.
+The repository has two layers, and they promise different things:
+
+- **The skill** ([`SKILL.md`](SKILL.md)) defines canonical roles for implementation, primary audit, critical audit and architecture ruling. It is provider-agnostic: the roles, not the agent names, drive the flow.
+- **The bridge** ([`scripts/audit_bridge.py`](scripts/audit_bridge.py)) packages evidence, calls an auditor, validates its verdict and gates publication. Today it runs one auditor binding, AGY with Gemini, so provider independence holds for the skill, not yet for the bridge.
 
 [![CI](https://github.com/robertfxbr/orchestrating-independent-code-audits/actions/workflows/ci.yml/badge.svg)](https://github.com/robertfxbr/orchestrating-independent-code-audits/actions/workflows/ci.yml)
 
 ## Rejected
 
-What the workflow refuses to do. Each item is one of the seven failure scenarios in
+What the workflow refuses to do. The cases come from the seven failure scenarios in
 [`PRESSURE_TESTS.md`](PRESSURE_TESTS.md), written before the rules that prevent them.
 
-- **Self-approval.** Passing tests are not approval. The implementer never approves its own code, even when the auditor is slow.
-- **Treating a missing auditor as optional.** An auditor that fails to authenticate or time out blocks the task as `TASK_APPROVAL_BLOCKED`; it never counts as a pass.
-- **Patching a finding directly.** Every finding is reproduced by a failing regression test before the fix.
-- **Workflow logic that depends on a provider.** Roles drive behavior. Swapping which agent implements and which audits changes configuration, not the flow.
-- **Carrying approval forward.** Approval belongs to an exact commit SHA. A later HEAD is unapproved until audited.
-- **Picking the convenient verdict.** When the primary and critical auditors materially disagree, work stops for a human ruling (`ARCHITECTURE_STOP`).
-- **Merging.** No merge command exists in this project. Push and PR creation require a final approval; merge stays with the user.
+### Enforced by the bridge, with a test
+
+| Refused | How the bridge refuses it | Test |
+|---|---|---|
+| Counting a missing auditor as a pass | An auditor timeout never becomes `TASK_APPROVED`; malformed output is retried twice, then `AUDITOR_INFRA_STOP` | [timeout](tests/test_failure_semantics.py#L85), [malformed output](tests/test_failure_semantics.py#L69) |
+| Publishing without final approval | Push and PR creation run only after a final high-review approval; `FIX_REQUIRED` never publishes | [final approval](tests/test_audit_bridge.py#L179), [fix required](tests/test_cli_execution.py#L62) |
+| Merging | No merge command exists; a request that is not a final approval is refused with no `git` or `gh` call | [refuses merge](tests/test_audit_bridge.py#L214) |
+| Carrying approval forward | A verdict must name the audited HEAD; the final gate rejects a Git state that differs from the audited one | [verdict HEAD](tests/test_verdict_parser.py#L56), [final gate](tests/test_final_identity.py#L9) |
+| Auditing a moving target | A dirty worktree or an invalid SHA blocks packaging; a new attempt cannot overwrite earlier evidence | [dirty worktree](tests/test_failure_semantics.py#L18), [invalid SHA](tests/test_failure_semantics.py#L52), [immutable attempts](tests/test_audit_bridge.py#L92) |
+| Letting the auditor edit code | The auditor runs read-only and the invocation never accepts edits | [read-only](tests/test_audit_bridge.py#L159) |
+| Fixing forever | After three fix attempts the task escalates to high review | [escalation](tests/test_failure_semantics.py#L97) |
+
+### Process rules in `SKILL.md`, not enforced by code
+
+- **Self-approval.** The implementer never approves its own code. The bridge makes approval come from the auditor's verdict, but it does not check who the implementer was.
+- **Patching a finding directly.** Every finding is reproduced by a failing regression test before the fix. The bridge records test evidence; it does not verify that a regression test came first.
+- **Picking the convenient verdict.** When the primary and critical auditors materially disagree, work stops for a human ruling. The bridge calls one auditor, so it cannot see a disagreement: a critical finding stops the task as `ARCHITECTURE_STOP` for a human, instead of going to a second auditor.
+- **Workflow logic that depends on a provider.** Swapping which agent implements and which audits is a configuration change in the skill. In the bridge it would be a code change.
 
 ## Contract
 
@@ -31,9 +45,8 @@ Auditor output that does not match [`schemas/auditor_verdict.schema.json`](schem
 
 - 38 tests, 92% line coverage on the bridge, CI on Python 3.11, 3.12 and 3.13 with a 90% coverage floor.
 - Tests drive real Git repositories in temporary directories and replace the auditor CLI and `gh` with fakes, so the suite needs no network, no credentials and no model calls.
-- Failure paths are tested directly: an auditor timeout never becomes `TASK_APPROVED`, malformed output is retried twice and then stops, a dirty worktree or invalid SHA blocks packaging, the final gate rejects a Git state that differs from the audited one, and a new attempt cannot overwrite earlier evidence.
 
-What the tests do not prove: the quality of a real model's review. They prove that the bridge packages evidence, validates verdicts and routes them without letting any path skip an audit.
+What the tests do not prove: the quality of a real model's review, or that the process rules above were followed. They prove that the bridge packages evidence, validates verdicts and gates publication on the paths listed in the table.
 
 ## Install
 
