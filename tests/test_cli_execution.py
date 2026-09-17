@@ -68,16 +68,22 @@ def test_cli_audit_fix_required_never_publishes(git_repo, tmp_path, monkeypatch,
         verdict='FIX_REQUIRED', spec_compliance='CHANGES_REQUIRED',
         code_quality='CHANGES_REQUIRED', test_evidence='FAIL',
         architecture_stop=False, findings=[], confidence='HIGH')))
-    monkeypatch.setattr(bridge, 'run_agy_audit', lambda *args: raw)
+    claude_raw = json.dumps(dict(type='result', subtype='success', is_error=False,
+                                 structured_output=json.loads(raw)['structured_output']))
+    monkeypatch.setattr(bridge, '_invoke_auditor', lambda config, command, cwd: claude_raw)
+    monkeypatch.setattr(bridge, 'run_check', lambda command: (0, '{"loggedIn": true}'))
+    monkeypatch.setattr(bridge.shutil, 'which', lambda name: '/bin/' + name)
     def forbidden(*args, **kwargs):
         pytest.fail('publication is forbidden after FIX_REQUIRED')
     monkeypatch.setattr(bridge, 'finalize_after_approval', forbidden)
     body = tmp_path / 'body.md'
     body.write_text('body')
+    bindings = tmp_path / 'bindings.yaml'
+    bindings.write_text(Path('audit-orchestration.example.yaml').read_text(encoding='utf-8'), encoding='utf-8')
     code = bridge.main(['finalize', '--phase', 'final', '--task-id', 'cli',
                         '--base-sha', head, '--head-sha', head,
                         '--spec-path', str(spec), '--plan-path', str(plan),
-                        '--runtime-root', str(tmp_path / 'runtime'),
+                        '--runtime-root', str(tmp_path / 'runtime'), '--bindings', str(bindings),
                         '--pr-title', 'title', '--pr-body-file', str(body)])
     assert code == 1
     assert json.loads(capsys.readouterr().out.splitlines()[-1])['status'] == 'FIX_REQUIRED'

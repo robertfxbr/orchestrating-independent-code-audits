@@ -1,18 +1,27 @@
+# Written by the skill on first use, after the user confirms the bindings.
+# The values below are the suggested binding. Every agent can be changed.
 version: 1
 
 roles:
-  implementer: codex
-  primary_auditor: gemini
-  critical_auditor: claude
-  ruling_authority: user
+  implementer: codex                      # required
+  primary_auditor: agy-gemini-medium      # required, must differ from implementer
+  critical_auditor: claude-opus-5         # optional: null sends critical findings to ruling_authority
+  additional_auditors: []                 # optional: e.g. [claude]; each must approve the same HEAD
+  ruling_authority: gpt-6-astra           # optional: or gpt-5.6-sol; null means the user rules
+  merge_authority: user                   # always the user
 
 providers:
   codex:
     command: null
-  gemini:
-    command: null
-  claude:
-    command: null
+  agy-gemini-medium:
+    command: agy
+    model: Gemini 3.8 Flash (Medium)
+  claude-opus-5:
+    command: claude
+    model: claude-opus-5
+  gpt-6-astra:
+    command: null                          # manual: the user relays the package and the ruling
+    model: GPT-6 Astra
 
 critical_policy:
   trigger_on_primary_severity:
@@ -27,3 +36,5 @@ fallbacks:
 independence:
   require_implementer_different_from_primary_auditor: true
   require_critical_auditor_different_from_implementer: true
+  require_additional_auditors_different_from_implementer: true
+  accept_critical_same_as_primary: false   # true only if the user accepts a non-independent second opinion

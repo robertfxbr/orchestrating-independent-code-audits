@@ -6,10 +6,19 @@ import json
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from jsonschema import ValidationError, validate
+
+from scripts.bindings import (
+    DEFAULT_BINDINGS_PATH,
+    Bindings,
+    BindingsInvalid,
+    BindingsRequired,
+    load_bindings,
+)
+from scripts.preflight import all_auditors, check_auditors, run_check
 
 ARCHITECTURE_STOP = "ARCHITECTURE_STOP"
 
@@ -75,6 +84,9 @@ class BridgeConfig:
     agy_runner: object | None = None
     git_runner: object | None = None
     gh_runner: object | None = None
+    bindings: Bindings | None = None
+    check_runner: object | None = None
+    which: object | None = None
 
     @classmethod
     def from_env(cls) -> "BridgeConfig":
@@ -91,69 +103,25 @@ class BridgeConfig:
         )
 
     def with_runtime_root(self, runtime_root: Path) -> "BridgeConfig":
-        return BridgeConfig(
-            runtime_root=runtime_root,
-            agy_command=self.agy_command,
-            task_model=self.task_model,
-            high_model=self.high_model,
-            final_model=self.final_model,
-            protected_contract_files=self.protected_contract_files,
-            agy_runner=self.agy_runner,
-            git_runner=self.git_runner,
-            gh_runner=self.gh_runner,
-        )
+        return replace(self, runtime_root=runtime_root)
 
     def with_protected_contract_files(self, protected_contract_files: tuple[str, ...]) -> "BridgeConfig":
-        return BridgeConfig(
-            runtime_root=self.runtime_root,
-            agy_command=self.agy_command,
-            task_model=self.task_model,
-            high_model=self.high_model,
-            final_model=self.final_model,
-            protected_contract_files=protected_contract_files,
-            agy_runner=self.agy_runner,
-            git_runner=self.git_runner,
-            gh_runner=self.gh_runner,
-        )
+        return replace(self, protected_contract_files=protected_contract_files)
 
     def with_agy_runner(self, agy_runner: object) -> "BridgeConfig":
-        return BridgeConfig(
-            runtime_root=self.runtime_root,
-            agy_command=self.agy_command,
-            task_model=self.task_model,
-            high_model=self.high_model,
-            final_model=self.final_model,
-            protected_contract_files=self.protected_contract_files,
-            agy_runner=agy_runner,
-            git_runner=self.git_runner,
-            gh_runner=self.gh_runner,
-        )
+        return replace(self, agy_runner=agy_runner)
 
     def with_git_runner(self, git_runner: object) -> "BridgeConfig":
-        return BridgeConfig(
-            runtime_root=self.runtime_root,
-            agy_command=self.agy_command,
-            task_model=self.task_model,
-            high_model=self.high_model,
-            final_model=self.final_model,
-            protected_contract_files=self.protected_contract_files,
-            agy_runner=self.agy_runner,
-            git_runner=git_runner,
-            gh_runner=self.gh_runner,
-        )
+        return replace(self, git_runner=git_runner)
 
     def with_gh_runner(self, gh_runner: object) -> "BridgeConfig":
-        return BridgeConfig(
-            runtime_root=self.runtime_root,
-            agy_command=self.agy_command,
-            task_model=self.task_model,
-            high_model=self.high_model,
-            final_model=self.final_model,
-            protected_contract_files=self.protected_contract_files,
-            agy_runner=self.agy_runner,
-            git_runner=self.git_runner,
-            gh_runner=gh_runner,
-        )
+        return replace(self, gh_runner=gh_runner)
+
+    def with_bindings(self, bindings: Bindings) -> "BridgeConfig":
+        return replace(self, bindings=bindings)
+
+    def with_check_tools(self, check_runner: object, which: object) -> "BridgeConfig":
+        return replace(self, check_runner=check_runner, which=which)
 
 
 @dataclass(frozen=True)
@@ -399,6 +367,11 @@ def parse_auditor_output(raw_output: str, schema_path: Path) -> dict[str, object
             if payload["status"] != "SUCCESS" or "structured_output" not in payload:
                 raise AuditorFailure("AGY returned an error or incomplete response")
             payload = payload["structured_output"]
+        elif isinstance(payload, dict) and payload.get("type") == "result":
+            if (payload.get("is_error") is not False or payload.get("subtype") != "success"
+                    or not isinstance(payload.get("structured_output"), dict)):
+                raise AuditorFailure("Claude returned an error or no structured output")
+            payload = payload["structured_output"]
         validate(instance=payload, schema=load_schema(schema_path))
     except (json.JSONDecodeError, ValidationError) as exc:
         raise AuditorFailure(f"invalid auditor verdict: {exc}") from exc
@@ -461,12 +434,104 @@ def run_agy_audit(config: BridgeConfig, package_dir: Path, prompt_kind: str) -> 
     return completed.stdout
 
 
+def build_auditor_command(command: str, model: str, package_dir: Path, prompt: str, schema_path: Path) -> list[str]:
+    """Read-only invocation for each supported auditor CLI."""
+    directories = [str(package_dir)]
+    manifest_path = package_dir / "manifest.json"
+    if manifest_path.exists():
+        worktree = json.loads(manifest_path.read_text(encoding="utf-8")).get("worktree")
+        if worktree:
+            directories.append(worktree)
+    if command == "agy":
+        args = ["agy", "--model", model, "--mode", "plan", "--sandbox"]
+        for directory in directories:
+            args.extend(["--add-dir", directory])
+        return [*args, "--output-format", "json", "--json-schema", str(schema_path), "--print", prompt]
+    if command == "claude":
+        args = ["claude", "--print", prompt, "--model", model, "--output-format", "json",
+                "--json-schema", schema_path.read_text(encoding="utf-8"),
+                "--permission-mode", "plan", "--tools", "Read,Grep,Glob"]
+        for directory in directories:
+            args.extend(["--add-dir", directory])
+        return args
+    raise AuditorFailure(f"no adapter for auditor command {command!r}")
+
+
+def _invoke_auditor(config: BridgeConfig, command: list[str], package_dir: Path) -> str:
+    if config.agy_runner is not None:
+        return config.agy_runner.run(command, package_dir)
+    completed = subprocess.run(command, cwd=package_dir, check=False, capture_output=True, text=True)
+    if completed.returncode != 0:
+        raise AuditorFailure(f"{command[0]} exited with status {completed.returncode}: {completed.stderr.strip()}")
+    return completed.stdout
+
+
+STATUS_SEVERITY = ("ARCHITECTURE_STOP", "ESCALATE_TO_HIGH_REVIEW", "FIX_REQUIRED", "TASK_APPROVED")
+COMBINED_VERDICT = {
+    "ARCHITECTURE_STOP": "ARCHITECTURE_STOP",
+    "ESCALATE_TO_HIGH_REVIEW": "FIX_REQUIRED",
+    "FIX_REQUIRED": "FIX_REQUIRED",
+    "TASK_APPROVED": "TASK_APPROVED",
+}
+
+
+def run_bound_audits(config: BridgeConfig, package_dir: Path, prompt_kind: str, schema_path: Path) -> BridgeResult:
+    """Call the auditors the user bound to this phase. Every one of them must approve the same HEAD."""
+    bindings = config.bindings
+    manifest = json.loads((package_dir / "manifest.json").read_text(encoding="utf-8"))
+    head_sha = manifest["head_sha"]
+    agents = bindings.auditors_for(prompt_kind)
+    checks = check_auditors(bindings, agents, run=config.check_runner or run_check, which=config.which or shutil.which)
+    (package_dir / "preflight.json").write_text(json.dumps([c.as_dict() for c in checks], indent=2), encoding="utf-8")
+    blocking = [c for c in checks if c.blocks]
+    if blocking:
+        return BridgeResult("AUDITOR_NOT_READY", package_dir, None,
+                            " | ".join(f"{c.agent}: {c.status}. {c.fix}" for c in blocking))
+    verdicts: list[tuple[str, dict[str, object]]] = []
+    for agent in agents:
+        provider = bindings.providers[agent]
+        prompt = render_auditor_prompt(prompt_kind, package_dir, provider.model or agent)
+        prompt_path = package_dir / f"auditor-{agent}-prompt.txt"
+        prompt_path.write_text(prompt, encoding="utf-8")
+        if provider.command is None:
+            return BridgeResult("MANUAL_AUDIT_REQUIRED", package_dir, head_sha,
+                                f"{agent} is a manual auditor: send it {prompt_path} and the package, then record its verdict")
+        command = build_auditor_command(provider.command, provider.model, package_dir, prompt, schema_path)
+        verdict = None
+        last_output = ""
+        for attempt in range(MAX_AUDITOR_RETRIES + 1):
+            try:
+                last_output = _invoke_auditor(config, command, package_dir)
+                (package_dir / f"auditor-{agent}-output-{attempt + 1}.txt").write_text(last_output, encoding="utf-8")
+                verdict = parse_auditor_output(last_output, schema_path)
+                break
+            except (AuditorFailure, TimeoutError, OSError):
+                continue
+        (package_dir / f"auditor-{agent}-raw-output.txt").write_text(last_output, encoding="utf-8")
+        if verdict is None:
+            return BridgeResult("AUDITOR_INFRA_STOP", package_dir, None, f"{agent} failed after maximum retries")
+        verdicts.append((agent, verdict))
+
+    statuses = [route_verdict(verdict, fix_attempt_count=0).status for _, verdict in verdicts]
+    status = min(statuses, key=STATUS_SEVERITY.index)
+    gate_agent, gate_verdict = verdicts[0]
+    normalized = dict(gate_verdict)
+    normalized["verdict"] = COMBINED_VERDICT[status] if status != "TASK_APPROVED" else gate_verdict["verdict"]
+    normalized["prompt_kind"] = prompt_kind
+    normalized["auditors"] = {agent: verdict["verdict"] for agent, verdict in verdicts}
+    write_normalized_verdict(package_dir, normalized, head_sha)
+    agreed = "all auditors approved" if status == "TASK_APPROVED" else f"blocked by {', '.join(a for a, _ in verdicts)}"
+    return BridgeResult(status, package_dir, head_sha, f"{gate_agent} gated; {agreed}")
+
+
 def run_audit_with_retries(
     config: BridgeConfig,
     package_dir: Path,
     prompt_kind: str,
     schema_path: Path,
 ) -> BridgeResult:
+    if config.bindings is not None:
+        return run_bound_audits(config, package_dir, prompt_kind, schema_path)
     last_output = ""
     for attempt in range(MAX_AUDITOR_RETRIES + 1):
         try:
@@ -560,6 +625,8 @@ def calculate_audit_package_id(package_dir: Path) -> str:
     for filename in PROVENANCE_FILES:
         path = package_dir / filename
         digest.update(path.read_bytes() if path.exists() else b"")
+    for path in sorted(package_dir.glob("auditor-*-raw-output.txt")):
+        digest.update(path.name.encode("utf-8") + path.read_bytes())
     return digest.hexdigest()
 
 
@@ -682,7 +749,9 @@ V1.7 must not begin until V1.6 operational closeout is resolved and merged.
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="audit_bridge")
     subcommands = parser.add_subparsers(dest="command", required=True)
-    for name in ("package", "audit", "finalize"):
+    check = subcommands.add_parser("check-bindings")
+    check.add_argument("--bindings", type=Path, default=DEFAULT_BINDINGS_PATH)
+    for name in ("package", "audit", "escalate", "finalize"):
         command = subcommands.add_parser(name)
         for flag in ("phase", "task-id", "base-sha", "head-sha"):
             command.add_argument(f"--{flag}", required=True)
@@ -690,11 +759,33 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument(f"--{flag}", type=Path, required=True)
         for flag in ("test-output-path", "tdd-evidence-path", "runtime-root"):
             command.add_argument(f"--{flag}", type=Path)
+        if name != "package":
+            command.add_argument("--bindings", type=Path)
         if name == "finalize":
             command.add_argument("--remote", default="origin")
             command.add_argument("--pr-title", required=True)
             command.add_argument("--pr-body-file", type=Path, required=True)
     return parser
+
+
+def check_bindings(path: Path, run=run_check, which=shutil.which) -> int:
+    """Validate a bindings file, then confirm every auditor is installed, signed in and has its model.
+
+    Nothing is sent to a model: the checks are `claude auth status` and `agy models`.
+    """
+    auditors: list[dict[str, str]] = []
+    try:
+        bindings = load_bindings(path)
+        checks = check_auditors(bindings, all_auditors(bindings), run=run, which=which)
+        auditors = [c.as_dict() for c in checks]
+        problems = [f"{c.agent}: {c.status}. {c.fix}" for c in checks if c.blocks]
+        status = "AUDITOR_NOT_READY" if problems else "BINDINGS_VALID"
+    except BindingsRequired as exc:
+        status, problems = exc.status, [str(exc)]
+    except BindingsInvalid as exc:
+        status, problems = exc.status, exc.errors
+    print(json.dumps({"status": status, "path": str(path), "auditors": auditors, "problems": problems}))
+    return 0 if status == "BINDINGS_VALID" else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -703,6 +794,8 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         return int(exc.code)
+    if args.command == "check-bindings":
+        return check_bindings(args.bindings)
     try:
         config = BridgeConfig.from_env()
         if args.runtime_root:
@@ -713,16 +806,18 @@ def main(argv: list[str] | None = None) -> int:
         result = build_audit_package(config, request)
         package = result.attempt_dir
         if args.command != "package":
+            worktree = Path(json.loads((package / "manifest.json").read_text(encoding="utf-8"))["worktree"])
+            config = config.with_bindings(load_bindings(args.bindings or worktree / DEFAULT_BINDINGS_PATH))
             schema = package / "auditor_verdict.schema.json"
             shutil.copyfile(Path(__file__).resolve().parent.parent / "schemas/auditor_verdict.schema.json", schema)
-            result = run_audit_with_retries(config, package,
-                                           "final_phase" if args.command == "finalize" else "task", schema)
+            prompt_kind = {"audit": "task", "escalate": "escalation", "finalize": "final_phase"}[args.command]
+            result = run_audit_with_retries(config, package, prompt_kind, schema)
         if args.command == "finalize" and result.status == "TASK_APPROVED":
             manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
             result = finalize_after_approval(config, package, args.remote, manifest["branch"],
                                             args.pr_title, args.pr_body_file.read_text(encoding="utf-8"))
     except (RepositorySafetyStop, ArchitectureStop, AttemptAlreadyExistsError,
-            AuditProvenanceInvalid, AuditorFailure) as exc:
+            AuditProvenanceInvalid, AuditorFailure, BindingsInvalid, BindingsRequired) as exc:
         result = BridgeResult(exc.status, None, None, str(exc))
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
         result = BridgeResult("REPOSITORY_SAFETY_STOP", None, None, str(exc))
