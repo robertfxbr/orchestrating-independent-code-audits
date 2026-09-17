@@ -1,11 +1,11 @@
 # orchestrating-independent-code-audits
 
-A process skill for software work where the implementer must not approve its own code, plus a Python bridge that enforces part of it.
+A process skill for software work where the implementer must not approve its own code, plus a Python bridge that enforces most of it.
 
 The repository has two layers, and they promise different things:
 
 - **The skill** ([`SKILL.md`](SKILL.md)) defines canonical roles for implementation, primary audit, critical audit and architecture ruling. It is provider-agnostic: the roles, not the agent names, drive the flow, and on first use it asks the user which agents fill them.
-- **The bridge** ([`scripts/audit_bridge.py`](scripts/audit_bridge.py)) packages evidence, calls an auditor, validates its verdict and gates publication. Today it runs one auditor binding, AGY with Gemini, so provider independence holds for the skill, not yet for the bridge.
+- **The bridge** ([`scripts/audit_bridge.py`](scripts/audit_bridge.py)) reads the bindings the user chose, refuses invalid ones, packages evidence, calls every auditor bound to the phase, validates their verdicts and gates publication. It can call AGY and Claude Code; an agent without a command is treated as manual.
 
 [![CI](https://github.com/robertfxbr/orchestrating-independent-code-audits/actions/workflows/ci.yml/badge.svg)](https://github.com/robertfxbr/orchestrating-independent-code-audits/actions/workflows/ci.yml)
 
@@ -23,31 +23,38 @@ What the workflow refuses to do. The cases come from the ten failure scenarios i
 | Merging | No merge command exists; a request that is not a final approval is refused with no `git` or `gh` call | [refuses merge](tests/test_audit_bridge.py#L214) |
 | Carrying approval forward | A verdict must name the audited HEAD; the final gate rejects a Git state that differs from the audited one | [verdict HEAD](tests/test_verdict_parser.py#L56), [final gate](tests/test_final_identity.py#L9) |
 | Auditing a moving target | A dirty worktree or an invalid SHA blocks packaging; a new attempt cannot overwrite earlier evidence | [dirty worktree](tests/test_failure_semantics.py#L18), [invalid SHA](tests/test_failure_semantics.py#L52), [immutable attempts](tests/test_audit_bridge.py#L92) |
-| Letting the auditor edit code | The auditor runs read-only and the invocation never accepts edits | [read-only](tests/test_audit_bridge.py#L159) |
+| Letting the auditor edit code | AGY runs in plan mode with a sandbox; Claude Code runs in plan mode with only `Read`, `Grep` and `Glob` | [AGY read-only](tests/test_audit_bridge.py#L159), [Claude read-only](tests/test_bindings.py#L176) |
 | Approving past a critical finding | A `CRITICAL` finding or an `architecture_stop` flag routes to `ARCHITECTURE_STOP`, even inside a `TASK_APPROVED` verdict | [critical stop](tests/test_failure_semantics.py#L130) |
 | Fixing forever | After three fix attempts the task escalates to high review | [escalation](tests/test_failure_semantics.py#L97) |
+| Auditing without agreed bindings | `audit`, `escalate` and `finalize` stop with `BINDINGS_REQUIRED` when there is no bindings file, before any auditor runs | [no bindings](tests/test_bindings.py#L302) |
+| Bindings that break independence | An implementer that audits itself, a missing primary auditor, merge given to an agent, or a critical auditor equal to the primary without explicit acceptance is `BINDINGS_INVALID` | [invalid bindings](tests/test_bindings.py#L100), [explicit acceptance](tests/test_bindings.py#L108) |
+| Outvoting a dissenting auditor | Every auditor bound to the phase runs; one `FIX_REQUIRED` blocks approval, one critical finding stops for a ruling | [dissent](tests/test_bindings.py#L204), [critical from any auditor](tests/test_bindings.py#L217) |
+| Sending high-stakes audits to the wrong agent | Escalation and final audits go to `critical_auditor`, or to `primary_auditor` when none is bound | [routing](tests/test_bindings.py#L152), [escalate CLI](tests/test_bindings.py#L317) |
+| Guessing a manual auditor's answer | An auditor without a command stops as `MANUAL_AUDIT_REQUIRED` and leaves the prompt; nothing is called | [manual](tests/test_bindings.py#L225) |
 
 ### Process rules in `SKILL.md`, not enforced by code
 
 - **Self-approval.** The implementer never approves its own code. The bridge makes approval come from the auditor's verdict, but it does not check who the implementer was.
 - **Patching a finding directly.** Every finding is reproduced by a failing regression test before the fix. The bridge records test evidence; it does not verify that a regression test came first.
-- **Picking the convenient verdict.** When the primary and critical auditors materially disagree, work stops for a human ruling. The bridge calls one auditor, so it cannot see a disagreement: a critical finding stops the task as `ARCHITECTURE_STOP` for a human, instead of going to a second auditor.
-- **Choosing agents for the user.** On first use the skill stops, suggests a binding, and asks which agents to keep, remove or add before writing `.agents/audit-orchestration.yaml`. No code checks this: the bridge does not read that file, and it automates only the primary audit of the suggested binding.
-- **Letting one dissenting auditor be outvoted.** With additional auditors, approval needs every configured auditor on the same HEAD. The bridge calls one auditor, so this rule applies only when the audits run through the chosen agents.
+- **Choosing agents for the user.** The first-use conversation is the skill's job. The bridge refuses to audit without a bindings file, but it cannot tell whether the user or the agent wrote it.
+- **Checking that an agent is signed in.** `check-bindings` confirms each auditor's command is on `PATH` without running it. A command that is installed but not authenticated is only caught when the audit fails, as `AUDITOR_INFRA_STOP`.
+- **Falling back to a listed agent.** `fallbacks` is part of the file, but the bridge does not switch to a fallback; it stops.
+- **Recording a manual verdict.** The bridge stops for a manual auditor, but reading that auditor's answer back into the package is not automated yet.
 
 ## Contract
 
 **In:** a Git worktree, the exact `--base-sha` and `--head-sha`, the frozen spec and the approved plan.
 
 **Out:** an immutable audit package written outside the repository (Git state, diff, test evidence, prompt, raw auditor output) and one routed status:
-`PACKAGE_CREATED`, `TASK_APPROVED`, `PR_CREATED`, or a fail-closed stop: `AUDITOR_INFRA_STOP`, `REPOSITORY_SAFETY_STOP`, `ARCHITECTURE_STOP`.
+`PACKAGE_CREATED`, `TASK_APPROVED`, `PR_CREATED`, or a fail-closed stop: `AUDITOR_INFRA_STOP`, `REPOSITORY_SAFETY_STOP`, `ARCHITECTURE_STOP`, `BINDINGS_REQUIRED`, `BINDINGS_INVALID`, `MANUAL_AUDIT_REQUIRED`.
+`check-bindings` returns `BINDINGS_VALID`, `BINDINGS_UNAVAILABLE`, `BINDINGS_INVALID` or `BINDINGS_REQUIRED` and lists every problem.
 Auditor output that does not match [`schemas/auditor_verdict.schema.json`](schemas/auditor_verdict.schema.json) is rejected, not interpreted.
 
 ## Evidence
 
-- 45 tests, 92% line coverage on the bridge, CI on Python 3.11, 3.12 and 3.13 with a 90% coverage floor.
+- 80 tests, 94% line coverage on the bridge, CI on Python 3.11, 3.12 and 3.13 with a 90% coverage floor.
 - The shipped example configuration is tested against the binding rules: both required roles bound, no auditor equal to the implementer, merge always with the user.
-- Tests drive real Git repositories in temporary directories and replace the auditor CLI and `gh` with fakes, so the suite needs no network, no credentials and no model calls.
+- Tests drive real Git repositories in temporary directories and replace the auditor CLIs and `gh` with fakes, so the suite needs no network, no credentials and no model calls. The Claude Code result shape the fakes return was taken from one real `claude --print --output-format json --json-schema` call.
 
 What the tests do not prove: the quality of a real model's review, or that the process rules above were followed. They prove that the bridge packages evidence, validates verdicts and gates publication on the paths listed in the table.
 
@@ -130,6 +137,7 @@ independence:
   require_implementer_different_from_primary_auditor: true
   require_critical_auditor_different_from_implementer: true
   require_additional_auditors_different_from_implementer: true
+  accept_critical_same_as_primary: false   # true only if the user accepts a non-independent second opinion
 ```
 
 ### Roles
@@ -149,13 +157,13 @@ Findings are fixed through TDD: regression test first, RED, fix, GREEN, regressi
 
 Critical escalation calls the critical auditor. If primary and critical auditors agree, the implementer fixes through TDD and requests re-audit. If they materially disagree, the workflow stops for `ARCHITECTURE_RULING_REQUIRED`.
 
-In the bridge: there is no second auditor call. A critical finding, or a verdict that sets `architecture_stop`, routes to `ARCHITECTURE_STOP` for a human ruling, even when the verdict says `TASK_APPROVED`.
+In the bridge: `escalate` and `finalize` call `critical_auditor`. A critical finding or an `architecture_stop` flag from any auditor routes to `ARCHITECTURE_STOP` for a ruling, even when another auditor approved.
 
 ### Provider Swapping
 
 The workflow depends on canonical roles, not provider names. A project may bind those roles to any suitable tools or agents as long as independence rules hold.
 
-In the bridge: the auditor binding is AGY with Gemini, set in code. Swapping it today means changing `scripts/audit_bridge.py`.
+In the bridge: swapping agents is a change to `.agents/audit-orchestration.yaml`. The bridge has adapters for `agy` and `claude`; any other command is refused as `BINDINGS_INVALID` until an adapter exists.
 
 ### Auditor Unavailable
 
@@ -191,9 +199,23 @@ python -m scripts.audit_bridge package `
   --plan-path docs/superpowers/plans/2026-09-06-orchestrating-independent-code-audits.md
 ```
 
-### AGY Headless Read-Only Audit
+### Bindings
 
-AGY uses Gemini 3.8 Flash Medium for normal task audits and Gemini 3.8 Flash High for escalation and final audits. The High tier is the bridge's own escalation path; it is not the suggested `critical_auditor` (Claude Opus 5), whose audits run outside the bridge. It runs headlessly with sandboxed read-only access, explicit package/repository directories, and strict JSON schema validation. No command permission, edit mode, or dangerous permission bypass is allowed.
+`audit`, `escalate` and `finalize` read `.agents/audit-orchestration.yaml` from the audited worktree, or the file passed with `--bindings`. Check a file before the first audit:
+
+```bash
+python -m scripts.audit_bridge check-bindings --bindings .agents/audit-orchestration.yaml
+```
+
+### Auditor Adapters
+
+| Command | Invocation | Read-only by |
+|---|---|---|
+| `agy` | `agy --model <model> --mode plan --sandbox --add-dir <package> --add-dir <worktree> --output-format json --json-schema <schema file> --print <prompt>` | plan mode and sandbox |
+| `claude` | `claude --print <prompt> --model <model> --output-format json --json-schema <schema> --permission-mode plan --tools Read,Grep,Glob --add-dir <package> --add-dir <worktree>` | plan mode and a read-only tool list |
+| `null` | nothing is called; the prompt is written to the package and the bridge stops as `MANUAL_AUDIT_REQUIRED` | the user relays it |
+
+Each auditor's prompt and raw output are kept as `auditor-<agent>-prompt.txt` and `auditor-<agent>-raw-output.txt`, and the raw outputs feed the package ID.
 
 ```powershell
 python -m scripts.audit_bridge audit `
@@ -211,11 +233,11 @@ python -m scripts.audit_bridge audit `
 
 ### Automatic Fix Loop
 
-The implementer follows RED, minimal fix, GREEN, regression, focused commit, package, and independent audit. After three automatic fix attempts, the task escalates to Gemini 3.8 Flash High.
+The implementer follows RED, minimal fix, GREEN, regression, focused commit, package, and independent audit. After three automatic fix attempts, the status is `ESCALATE_TO_HIGH_REVIEW`; run `escalate` to send the package to `critical_auditor`.
 
 ### Final Phase Push and PR
 
-Only final Gemini 3.8 Flash High approval permits push and PR creation:
+Only a final approval from `critical_auditor` (or `primary_auditor` when none is bound), plus every additional auditor, permits push and PR creation:
 
 ```powershell
 python -m scripts.audit_bridge finalize `
@@ -231,8 +253,7 @@ python -m scripts.audit_bridge finalize `
 
 Use `--test-output-path` and `--tdd-evidence-path` to include validation evidence.
 `--runtime-root` selects an external evidence directory for a new immutable attempt.
-The installed AGY model identifiers are `Gemini 3.8 Flash (Medium)` and
-`Gemini 3.8 Flash (High)`; these implement the policy labels above without a provider change.
+`--bindings` points to a bindings file outside the worktree.
 
 No merge command is run by this project. The user retains merge authority.
 

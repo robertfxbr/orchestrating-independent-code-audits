@@ -37,3 +37,4 @@ independence:
   require_implementer_different_from_primary_auditor: true
   require_critical_auditor_different_from_implementer: true
   require_additional_auditors_different_from_implementer: true
+  accept_critical_same_as_primary: false   # true only if the user accepts a non-independent second opinion

@@ -93,7 +93,9 @@ Only a final approval on the exact HEAD permits `git push` and PR creation: from
 
 ## Bundled Bridge
 
-`scripts/audit_bridge.py` does not read the bindings file. It automates task audits with AGY and Gemini 3.8 Flash Medium, the suggested `primary_auditor`, and runs its own escalation and final audit with AGY and Gemini 3.8 Flash High. That is not the suggested `critical_auditor`: with the suggested binding, run critical, escalation and final audits through Claude Opus 5 outside the bridge. With any other binding, follow the same loop and stops, and run the audits through the chosen agents.
+`scripts/audit_bridge.py` reads `.agents/audit-orchestration.yaml` and refuses to audit without it (`BINDINGS_REQUIRED`) or with a binding that breaks the rules above (`BINDINGS_INVALID`). Run `check-bindings` after writing the file: it validates the rules and confirms each auditor's command is on `PATH` without running it.
+
+`audit` calls `primary_auditor` and every additional auditor; `escalate` and `finalize` call `critical_auditor` (or `primary_auditor` when none is bound) and every additional auditor. The bridge has adapters for `agy` and `claude`. An auditor without a command stops the bridge as `MANUAL_AUDIT_REQUIRED`; relay the written prompt and package to that agent. The bridge does not switch to `fallbacks` and does not read a manual verdict back yet.
 
 ## Aurum V1.6 Closeout
 
