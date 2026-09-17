@@ -4,14 +4,14 @@ A process skill for software work where the implementer must not approve its own
 
 The repository has two layers, and they promise different things:
 
-- **The skill** ([`SKILL.md`](SKILL.md)) defines canonical roles for implementation, primary audit, critical audit and architecture ruling. It is provider-agnostic: the roles, not the agent names, drive the flow.
+- **The skill** ([`SKILL.md`](SKILL.md)) defines canonical roles for implementation, primary audit, critical audit and architecture ruling. It is provider-agnostic: the roles, not the agent names, drive the flow, and on first use it asks the user which agents fill them.
 - **The bridge** ([`scripts/audit_bridge.py`](scripts/audit_bridge.py)) packages evidence, calls an auditor, validates its verdict and gates publication. Today it runs one auditor binding, AGY with Gemini, so provider independence holds for the skill, not yet for the bridge.
 
 [![CI](https://github.com/robertfxbr/orchestrating-independent-code-audits/actions/workflows/ci.yml/badge.svg)](https://github.com/robertfxbr/orchestrating-independent-code-audits/actions/workflows/ci.yml)
 
 ## Rejected
 
-What the workflow refuses to do. The cases come from the seven failure scenarios in
+What the workflow refuses to do. The cases come from the ten failure scenarios in
 [`PRESSURE_TESTS.md`](PRESSURE_TESTS.md), written before the rules that prevent them.
 
 ### Enforced by the bridge, with a test
@@ -32,7 +32,8 @@ What the workflow refuses to do. The cases come from the seven failure scenarios
 - **Self-approval.** The implementer never approves its own code. The bridge makes approval come from the auditor's verdict, but it does not check who the implementer was.
 - **Patching a finding directly.** Every finding is reproduced by a failing regression test before the fix. The bridge records test evidence; it does not verify that a regression test came first.
 - **Picking the convenient verdict.** When the primary and critical auditors materially disagree, work stops for a human ruling. The bridge calls one auditor, so it cannot see a disagreement: a critical finding stops the task as `ARCHITECTURE_STOP` for a human, instead of going to a second auditor.
-- **Workflow logic that depends on a provider.** Swapping which agent implements and which audits is a configuration change in the skill. In the bridge it would be a code change.
+- **Choosing agents for the user.** On first use the skill stops, suggests a binding, and asks which agents to keep, remove or add before writing `.agents/audit-orchestration.yaml`. No code checks this: the bridge does not read that file and automates only the suggested binding.
+- **Letting one dissenting auditor be outvoted.** With additional auditors, approval needs every configured auditor on the same HEAD. The bridge calls one auditor, so this rule applies only when the audits run through the chosen agents.
 
 ## Contract
 
@@ -44,7 +45,8 @@ Auditor output that does not match [`schemas/auditor_verdict.schema.json`](schem
 
 ## Evidence
 
-- 41 tests, 92% line coverage on the bridge, CI on Python 3.11, 3.12 and 3.13 with a 90% coverage floor.
+- 45 tests, 92% line coverage on the bridge, CI on Python 3.11, 3.12 and 3.13 with a 90% coverage floor.
+- The shipped example configuration is tested against the binding rules: both required roles bound, no auditor equal to the implementer, merge always with the user.
 - Tests drive real Git repositories in temporary directories and replace the auditor CLI and `gh` with fakes, so the suite needs no network, no credentials and no model calls.
 
 What the tests do not prove: the quality of a real model's review, or that the process rules above were followed. They prove that the bridge packages evidence, validates verdicts and gates publication on the paths listed in the table.
@@ -57,7 +59,7 @@ Requires Python 3.11 or newer and Git on `PATH`. The suite needs no network, no 
 git clone https://github.com/robertfxbr/orchestrating-independent-code-audits.git
 cd orchestrating-independent-code-audits
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scriptsctivate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[test]"
 pytest --cov=scripts --cov-report=term-missing
 ```
@@ -79,23 +81,38 @@ Copy-Item .\SKILL.md,.\audit-orchestration.example.yaml,.\PRESSURE_TESTS.md "$en
 
 ### Configure
 
-Projects can define `.agents/audit-orchestration.yaml` using this shape:
+There is nothing to configure before first use. When a project has no `.agents/audit-orchestration.yaml`, the skill stops before implementing and walks the user through the bindings:
+
+1. It shows the suggested binding: Codex implements, AGY with Gemini 3.8 Flash Medium audits every task, AGY with Gemini 3.8 Flash High handles critical findings, escalation and the final audit, ChatGPT holds architectural rulings, and the user merges.
+2. It asks which agents are installed and signed in.
+3. The user keeps the suggestion, removes optional roles (`critical_auditor`, `ruling_authority`), adds auditors, or rebinds any role. The skill explains what each removal changes and refuses bindings that break independence, such as an implementer that audits itself.
+4. After the user confirms, it writes the file and does not ask again.
+
+The written file has this shape, shown here with the suggested binding ([`audit-orchestration.example.yaml`](audit-orchestration.example.yaml)):
 
 ```yaml
+# Written by the skill on first use, after the user confirms the bindings.
+# The values below are the suggested binding. Every agent can be changed.
 version: 1
 
 roles:
-  implementer: codex
-  primary_auditor: gemini
-  critical_auditor: claude
-  ruling_authority: user
+  implementer: codex                      # required
+  primary_auditor: agy-gemini-medium      # required, must differ from implementer
+  critical_auditor: agy-gemini-high       # optional: null sends critical findings to ruling_authority
+  additional_auditors: []                 # optional: e.g. [claude]; each must approve the same HEAD
+  ruling_authority: chatgpt               # optional: null means the user rules
+  merge_authority: user                   # always the user
 
 providers:
   codex:
     command: null
-  gemini:
-    command: null
-  claude:
+  agy-gemini-medium:
+    command: agy
+    model: Gemini 3.8 Flash (Medium)
+  agy-gemini-high:
+    command: agy
+    model: Gemini 3.8 Flash (High)
+  chatgpt:
     command: null
 
 critical_policy:
@@ -111,16 +128,17 @@ fallbacks:
 independence:
   require_implementer_different_from_primary_auditor: true
   require_critical_auditor_different_from_implementer: true
+  require_additional_auditors_different_from_implementer: true
 ```
-
-Provider names in the example are illustrative bindings only.
 
 ### Roles
 
 - `implementer`: writes RED tests, implements, verifies GREEN/regression, and commits.
 - `primary_auditor`: reviews every task independently.
 - `critical_auditor`: performs adversarial review for critical findings or always-critical tasks.
-- `ruling_authority`: decides when auditors materially disagree.
+- `additional_auditors`: optional extra reviewers; every one must approve the same HEAD.
+- `ruling_authority`: decides architectural stops and material disagreement between auditors; the user when unset.
+- `merge_authority`: always the user.
 
 ### Flow
 
@@ -140,9 +158,7 @@ In the bridge: the auditor binding is AGY with Gemini, set in code. Swapping it 
 
 ### Auditor Unavailable
 
-Auditor unavailability never means approval. A missing primary auditor blocks as `TASK_APPROVAL_BLOCKED`; a missing required critical auditor blocks as `CRITICAL_REVIEW_BLOCKED`.
-
-In the bridge: these names are not used. An unavailable or failing auditor ends as `AUDITOR_INFRA_STOP`.
+Auditor unavailability never means approval. A configured auditor that cannot run, authenticate or return a valid verdict ends as `AUDITOR_INFRA_STOP`. The skill falls back only to an agent the user listed under `fallbacks`; it never picks a replacement on its own.
 
 ### Commit Pinning
 

@@ -1,17 +1,25 @@
+# Written by the skill on first use, after the user confirms the bindings.
+# The values below are the suggested binding. Every agent can be changed.
 version: 1
 
 roles:
-  implementer: codex
-  primary_auditor: gemini
-  critical_auditor: claude
-  ruling_authority: user
+  implementer: codex                      # required
+  primary_auditor: agy-gemini-medium      # required, must differ from implementer
+  critical_auditor: agy-gemini-high       # optional: null sends critical findings to ruling_authority
+  additional_auditors: []                 # optional: e.g. [claude]; each must approve the same HEAD
+  ruling_authority: chatgpt               # optional: null means the user rules
+  merge_authority: user                   # always the user
 
 providers:
   codex:
     command: null
-  gemini:
-    command: null
-  claude:
+  agy-gemini-medium:
+    command: agy
+    model: Gemini 3.8 Flash (Medium)
+  agy-gemini-high:
+    command: agy
+    model: Gemini 3.8 Flash (High)
+  chatgpt:
     command: null
 
 critical_policy:
@@ -27,3 +35,4 @@ fallbacks:
 independence:
   require_implementer_different_from_primary_auditor: true
   require_critical_auditor_different_from_implementer: true
+  require_additional_auditors_different_from_implementer: true
